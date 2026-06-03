@@ -19,9 +19,15 @@ const ALLOWED_ORIGINS = [
   /^https?:\/\/localhost(:\d+)?$/,
   /^https?:\/\/.*\.ngrok-free\.app$/,
   /^https?:\/\/.*\.ngrok\.io$/,
+  /^https?:\/\/.*\.vercel\.app$/,
 ];
+// Allow FRONTEND_URL and its www subdomain
 if (process.env.FRONTEND_URL) {
-  ALLOWED_ORIGINS.push(new RegExp('^' + process.env.FRONTEND_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'));
+  const escaped = process.env.FRONTEND_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  ALLOWED_ORIGINS.push(new RegExp('^' + escaped + '$'));
+  // also allow www. variant
+  const wwwEscaped = escaped.replace('://', '://www\\.');
+  ALLOWED_ORIGINS.push(new RegExp('^' + wwwEscaped + '$'));
 }
 
 app.use(cors({
