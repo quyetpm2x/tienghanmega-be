@@ -13,9 +13,14 @@ exports.submit = async (req, res, next) => {
 
 // Admin: get all registrations
 exports.getAll = async (req, res) => {
-  const { status } = req.query;
+  const { status, from, to } = req.query;
   const filter = {};
   if (status && status !== 'all') filter.status = status;
+  if (from || to) {
+    filter.createdAt = {};
+    if (from) filter.createdAt.$gte = new Date(from + 'T00:00:00+07:00');
+    if (to)   filter.createdAt.$lte = new Date(to   + 'T23:59:59+07:00');
+  }
   const regs = await Registration.find(filter).sort({ createdAt: -1 });
   success(res, regs);
 };
