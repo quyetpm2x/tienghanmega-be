@@ -47,7 +47,7 @@ app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
 app.use(express.urlencoded({ extended: true }));
 
-app.use('/api/v1', (req, res, next) => { res.set('Cache-Control', 'no-store'); next() }, routes);
+app.use('/', (req, res, next) => { res.set('Cache-Control', 'no-store'); next() }, routes);
 
 app.use(errorHandler);
 
