@@ -32,9 +32,11 @@ if (process.env.FRONTEND_URL) {
 
 app.use(cors({
   origin: (origin, cb) => {
+    console.log('[CORS] origin:', origin);
     if (!origin || ALLOWED_ORIGINS.some(r => r.test(origin))) {
       cb(null, true);
     } else {
+      console.log('[CORS] BLOCKED:', origin);
       cb(new Error('Not allowed by CORS'));
     }
   },
