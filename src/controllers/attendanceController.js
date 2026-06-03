@@ -3,10 +3,11 @@ const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
 exports.getAll = async (req, res) => {
-  const { teacherName, month } = req.query;
+  const { teacherName, month, className } = req.query;
   const filter = {};
   if (teacherName) filter.teacherName = teacherName;
-  if (month) filter.date = { $regex: `^${month}` }; // e.g. "2026-04"
+  if (className)   filter.className   = className;
+  if (month)       filter.date        = { $regex: `^${month}` };
   const sessions = await TeacherSession.find(filter).sort({ date: -1 });
   success(res, sessions);
 };
@@ -17,7 +18,16 @@ exports.create = async (req, res) => {
 };
 
 exports.update = async (req, res, next) => {
-  const session = await TeacherSession.findByIdAndUpdate(req.params.id, req.body, { new: true });
+  const { rescheduledDate, rescheduledTime, ...rest } = req.body;
+  const update = { ...rest };
+
+  if (rescheduledDate !== undefined) {
+    update.rescheduledDate = rescheduledDate;
+    update.rescheduledTime = rescheduledTime || '';
+    update.$push = { rescheduleHistory: { date: rescheduledDate, time: rescheduledTime || '', savedAt: new Date() } };
+  }
+
+  const session = await TeacherSession.findByIdAndUpdate(req.params.id, update, { new: true });
   if (!session) return next(new AppError('Không tìm thấy buổi dạy', 404));
   success(res, session, 'Cập nhật thành công');
 };

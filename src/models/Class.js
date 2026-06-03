@@ -12,6 +12,7 @@ const classSchema = new mongoose.Schema({
   endDate: String,
   status: { type: String, enum: ['active', 'upcoming', 'closed'], default: 'upcoming' },
   color: String,
+  note: { type: String, default: '' },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Class', classSchema);

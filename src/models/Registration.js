@@ -11,6 +11,12 @@ const registrationSchema = new mongoose.Schema({
   time: String,
   source: { type: String, default: 'Website' },
   status: { type: String, enum: ['new', 'contacted', 'enrolled', 'cancelled'], default: 'new' },
+  // location from IP
+  ip:          String,
+  country:     String,
+  countryCode: String,
+  city:        String,
+  isp:         String,
 }, { timestamps: true });
 
 module.exports = mongoose.model('Registration', registrationSchema);
