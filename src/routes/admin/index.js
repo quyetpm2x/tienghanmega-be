@@ -15,6 +15,7 @@ router.use('/student-attendance', require('./studentAttendance'));
 router.use('/upload',    require('./upload'));
 router.use('/revenue', require('./revenue'));
 router.use('/expenses', require('./expenses'));
+router.use('/expense-categories', require('./expense-categories'));
 router.use('/attendance', require('./attendance'));
 router.use('/faqs', require('./faqs'));
 router.use('/levels', require('./levels'));

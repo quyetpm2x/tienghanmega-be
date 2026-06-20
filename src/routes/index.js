@@ -8,6 +8,7 @@ router.get('/health', (req, res) => {
 router.use('/ip', require('./ip'));
 router.use('/auth', require('./auth'));
 router.use('/courses', require('./courses'));
+router.use('/classes', require('./classes'));
 router.use('/teachers', require('./teachers'));
 router.use('/schedule', require('./schedule'));
 router.use('/registrations', require('./registrations'));

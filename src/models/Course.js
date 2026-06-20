@@ -32,6 +32,7 @@ const courseSchema = new mongoose.Schema({
     result: String,
     refund: { type: Boolean, default: false },
   },
+  image: String,
   isActive: { type: Boolean, default: true },
 }, { timestamps: true });
 

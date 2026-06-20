@@ -6,7 +6,7 @@ const { success } = require('../../utils/response');
 const AppError = require('../../utils/AppError');
 
 const BASE_DIR = path.join(__dirname, '../../../public/uploads');
-const ALLOWED_FOLDERS = ['materials', 'teachers', 'general'];
+const ALLOWED_FOLDERS = ['materials', 'teachers', 'general', 'courses'];
 
 const storage = multer.diskStorage({
   destination: (req, _file, cb) => {

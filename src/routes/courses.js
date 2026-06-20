@@ -1,8 +1,8 @@
 const router = require('express').Router();
 const ctrl = require('../controllers/courseController');
-const { protect } = require('../middlewares/auth');
+const { protect, optionalProtect } = require('../middlewares/auth');
 
-router.get('/', ctrl.getAll);
+router.get('/', optionalProtect, ctrl.getAll);
 router.get('/:id', ctrl.getOne);
 router.post('/', protect, ctrl.create);
 router.put('/:id', protect, ctrl.update);

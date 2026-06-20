@@ -4,7 +4,7 @@ const AppError = require('../utils/AppError');
 
 exports.getAll = async (req, res) => {
   const { cat } = req.query;
-  const filter = { isActive: true };
+  const filter = req.admin ? {} : { isActive: true };
   if (cat && cat !== 'all') filter.cat = cat;
   const courses = await Course.find(filter).sort({ slug: 1 });
   success(res, courses);

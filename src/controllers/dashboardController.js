@@ -5,27 +5,36 @@ const Registration = require('../models/Registration');
 const { success } = require('../utils/response');
 
 exports.getStats = async (req, res) => {
-  // Tháng hiện tại dạng "2026-06"
   const now = new Date()
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  const monthFrom = `${currentMonth}-01`
+  const monthTo   = `${currentMonth}-31`
 
-  const [totalStudents, activeClasses, newRegistrations, revenues] = await Promise.all([
-    Student.countDocuments({ status: 'active' }),           // chỉ học sinh đang học
+  const [totalStudents, activeClasses, newRegistrations, currentMonthStudents, targetRecord] = await Promise.all([
+    Student.countDocuments({ status: 'active' }),
     Class.countDocuments({ status: 'active' }),
     Registration.countDocuments({ status: 'new' }),
-    Revenue.find().sort({ month: -1 }).limit(1),            // tháng gần nhất theo month field
+    // Tính doanh thu từ Student (giống getSummary) — học sinh có startDate trong tháng hiện tại
+    Student.find({
+      status: { $nin: ['dropped'] },
+      startDate: { $gte: monthFrom, $lte: monthTo },
+      $or: [{ coursePrice: { $gt: 0 } }, { amount: { $gt: 0 } }],
+    }).select('coursePrice amount'),
+    // Target vẫn lấy từ Revenue collection
+    Revenue.findOne({ month: currentMonth }).select('target'),
   ]);
 
-  const latestRevenue = revenues[0] || null;
+  const monthRevenue   = currentMonthStudents.reduce((s, s2) => s + ((s2.coursePrice || 0) > 0 ? s2.coursePrice : (s2.amount || 0)), 0)
+  const monthCollected = currentMonthStudents.reduce((s, s2) => s + (s2.amount || 0), 0)
 
   success(res, {
     totalStudents,
     activeClasses,
     newRegistrations,
-    monthRevenue:   latestRevenue?.revenue   || 0,
-    monthTarget:    latestRevenue?.target    || 0,
-    monthCollected: latestRevenue?.collected || 0,
-    monthLabel:     latestRevenue?.month     || currentMonth,
+    monthRevenue,
+    monthTarget:    targetRecord?.target || 0,
+    monthCollected,
+    monthLabel:     currentMonth,
     currentMonth,
   });
 };
