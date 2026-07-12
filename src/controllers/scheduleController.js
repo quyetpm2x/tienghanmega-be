@@ -1,25 +1,47 @@
-const Schedule = require('../models/Schedule');
+const Class = require('../models/Class');
+const Student = require('../models/Student');
 const { success } = require('../utils/response');
-const AppError = require('../utils/AppError');
+
+const dayLabel = (days) => (days || '').split(',').map(s => s.trim()).filter(Boolean).join('–');
 
 exports.getAll = async (req, res) => {
-  const schedules = await Schedule.find().sort({ createdAt: 1 });
-  success(res, schedules);
-};
+  // showOnSchedule defaults to true; use $ne:false so classes created before this field
+  // existed (which have no showOnSchedule stored at all) still show up.
+  const classes = await Class.find({ status: 'upcoming', showOnSchedule: { $ne: false } }).sort({ startDate: 1 });
 
-exports.create = async (req, res) => {
-  const schedule = await Schedule.create(req.body);
-  success(res, schedule, 'Tạo lịch khai giảng thành công', 201);
-};
+  // Classes with an explicit scheduleOrder come first (ascending), keeping their
+  // relative startDate order among themselves; unordered ones keep their startDate order.
+  classes.sort((a, b) => {
+    if (a.scheduleOrder != null && b.scheduleOrder != null) return a.scheduleOrder - b.scheduleOrder;
+    if (a.scheduleOrder != null) return -1;
+    if (b.scheduleOrder != null) return 1;
+    return 0;
+  });
 
-exports.update = async (req, res, next) => {
-  const schedule = await Schedule.findByIdAndUpdate(req.params.id, req.body, { new: true });
-  if (!schedule) return next(new AppError('Không tìm thấy lịch', 404));
-  success(res, schedule, 'Cập nhật thành công');
-};
+  // Class.enrolled is a manually-edited field that easily goes stale — count real
+  // Student records instead, same as the admin class list already does.
+  const enrolledCounts = await Student.aggregate([
+    { $match: { className: { $in: classes.map(c => c.name) } } },
+    { $group: { _id: '$className', count: { $sum: 1 } } },
+  ]);
+  const enrolledMap = Object.fromEntries(enrolledCounts.map(e => [e._id, e.count]));
 
-exports.remove = async (req, res, next) => {
-  const schedule = await Schedule.findByIdAndDelete(req.params.id);
-  if (!schedule) return next(new AppError('Không tìm thấy lịch', 404));
-  success(res, null, 'Xóa thành công');
+  const monthMap = new Map();
+  classes.forEach(c => {
+    const d = new Date(c.startDate);
+    if (!c.startDate || isNaN(d.getTime())) return;
+    const monthKey = `Tháng ${d.getMonth() + 1}/${d.getFullYear()}`;
+    if (!monthMap.has(monthKey)) monthMap.set(monthKey, []);
+    const enrolled = enrolledMap[c.name] || 0;
+    monthMap.get(monthKey).push({
+      name: c.course,
+      date: `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`,
+      days: dayLabel(c.days),
+      time: c.time,
+      slots: Math.max(0, (c.capacity || 0) - enrolled),
+      promo: c.promo || '',
+    });
+  });
+  const result = Array.from(monthMap.entries()).map(([month, courses]) => ({ month, courses }));
+  success(res, result);
 };

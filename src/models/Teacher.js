@@ -19,6 +19,7 @@ const teacherSchema = new mongoose.Schema({
   totalSessions: { type: Number, default: 0 },
   monthSessions: { type: Number, default: 0 },
   adminNote: String,
+  order: { type: Number, default: null },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Teacher', teacherSchema);

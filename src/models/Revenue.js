@@ -11,6 +11,7 @@ const revenueSchema = new mongoose.Schema({
     intermediate: { type: Number, default: 0 },
     topik: { type: Number, default: 0 },
     conversation: { type: Number, default: 0 },
+    bundle: { type: Number, default: 0 },
   },
 }, { timestamps: true });
 

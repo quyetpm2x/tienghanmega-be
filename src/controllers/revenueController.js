@@ -7,9 +7,10 @@ const AppError = require('../utils/AppError');
 function getCourseCategory(level) {
   if (!level) return 'conversation';
   const l = level.toLowerCase();
+  if (l.includes('lộ trình') || l.includes('lo trinh') || l.includes('combo')) return 'bundle';
   if (l.includes('sơ cấp') || l.includes('so cap')) return 'beginner';
   if (l.includes('trung cấp') || l.includes('trung cap')) return 'intermediate';
-  if (l.includes('topik') || l.includes('lộ trình') || l.includes('lo trinh')) return 'topik';
+  if (l.includes('topik')) return 'topik';
   return 'conversation';
 }
 
@@ -64,7 +65,7 @@ exports.getSummary = async (req, res, next) => {
     if (!monthMap[key]) {
       monthMap[key] = {
         revenue: 0, collected: 0,
-        breakdown: { beginner: 0, intermediate: 0, topik: 0, conversation: 0 },
+        breakdown: { beginner: 0, intermediate: 0, topik: 0, conversation: 0, bundle: 0 },
       };
     }
     const rev = (s.coursePrice || 0) > 0 ? s.coursePrice : (s.amount || 0);
@@ -97,7 +98,7 @@ exports.getSummary = async (req, res, next) => {
   // Add expense-only months (months with in-range expenses but no students)
   Object.keys(expenseMap).forEach(key => {
     if (!monthMap[key]) {
-      monthMap[key] = { revenue: 0, collected: 0, breakdown: { beginner:0, intermediate:0, topik:0, conversation:0 } };
+      monthMap[key] = { revenue: 0, collected: 0, breakdown: { beginner:0, intermediate:0, topik:0, conversation:0, bundle:0 } };
     }
   });
 
@@ -135,7 +136,7 @@ exports.getBreakdown = async (req, res, next) => {
       Expense.find(),
     ]);
 
-    const revenueBreakdown = { beginner: 0, intermediate: 0, topik: 0, conversation: 0 };
+    const revenueBreakdown = { beginner: 0, intermediate: 0, topik: 0, conversation: 0, bundle: 0 };
     const byMonth = {};
     let totalRevenue = 0, totalCollected = 0, totalDebt = 0;
 
@@ -148,7 +149,7 @@ exports.getBreakdown = async (req, res, next) => {
       totalCollected += s.amount || 0;
       const cat = getCourseCategory(s.level);
       revenueBreakdown[cat] += rev;
-      if (!byMonth[mk]) byMonth[mk] = { revenue:0, collected:0, expenses:{ salary:0,rent:0,marketing:0,utilities:0,other:0,total:0 }, breakdown:{ beginner:0,intermediate:0,topik:0,conversation:0 } };
+      if (!byMonth[mk]) byMonth[mk] = { revenue:0, collected:0, expenses:{ salary:0,rent:0,marketing:0,utilities:0,other:0,total:0 }, breakdown:{ beginner:0,intermediate:0,topik:0,conversation:0,bundle:0 } };
       byMonth[mk].revenue   += rev;
       byMonth[mk].collected += s.amount || 0;
       byMonth[mk].breakdown[cat] += rev;
@@ -165,7 +166,7 @@ exports.getBreakdown = async (req, res, next) => {
       const cat = e.category || 'other';
       expenseBreakdown[cat] = (expenseBreakdown[cat] || 0) + (e.amount || 0);
       totalExpenses += e.amount || 0;
-      if (!byMonth[mk]) byMonth[mk] = { revenue:0, collected:0, expenses:{ salary:0,rent:0,marketing:0,utilities:0,other:0,total:0 }, breakdown:{ beginner:0,intermediate:0,topik:0,conversation:0 } };
+      if (!byMonth[mk]) byMonth[mk] = { revenue:0, collected:0, expenses:{ salary:0,rent:0,marketing:0,utilities:0,other:0,total:0 }, breakdown:{ beginner:0,intermediate:0,topik:0,conversation:0,bundle:0 } };
       byMonth[mk].expenses[cat] = (byMonth[mk].expenses[cat] || 0) + (e.amount || 0);
       byMonth[mk].expenses.total += e.amount || 0;
     });

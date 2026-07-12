@@ -5,7 +5,6 @@ const connectDB = require('../config/database');
 const Admin = require('../models/Admin');
 const Course = require('../models/Course');
 const Teacher = require('../models/Teacher');
-const Schedule = require('../models/Schedule');
 const Class = require('../models/Class');
 const Student = require('../models/Student');
 const Revenue = require('../models/Revenue');
@@ -40,19 +39,6 @@ const teachers = [
   { name:'Cô Nguyễn Nga',  nat:'vn', cert:'TOPIK II Cấp 5',               credentials:['6 năm kinh nghiệm dạy tiếng Hàn','Chuyên gia luyện thi TOPIK II toàn diện','Từng học và thực tập tại Seoul, Hàn Quốc','95% học viên đạt chứng chỉ sau khoá học','Tác giả bộ đề mock test TOPIK tại MEGA'], spec:'TOPIK II, Ôn thi', color:'#c0392b', src:'/assets/giang-vien/gv-nguyen-nga.svg' },
   { name:'Cô Thu Trang',   nat:'vn', cert:'TOPIK II Cấp 3',               credentials:['4 năm kinh nghiệm giảng dạy giao tiếp','Phương pháp học tiếng Hàn qua tình huống thực','Chuyên gia luyện phản xạ nói tự nhiên','Kinh nghiệm thông dịch tại công ty Hàn Quốc','Giảng viên giao tiếp thực chiến tại MEGA'], spec:'Giao tiếp, Sơ cấp', color:'#10b981', src:'/assets/giang-vien/gv-thu-trang.svg' },
   { name:'Cô Ánh Linh',    nat:'vn', cert:'TOPIK II Cấp 4',               credentials:['5 năm kinh nghiệm giảng dạy tiếng Hàn','Dạy từ sơ cấp đến luyện thi TOPIK II','Chứng chỉ giảng dạy quốc tế KoFLA','Phương pháp kết hợp ngữ pháp và hội thoại','Học viên yêu thích qua nhiều năm giảng dạy'], spec:'Sơ & Trung cấp, Ngữ pháp', color:'#c0392b', src:'/assets/giang-vien/gv-anh-linh.svg' },
-];
-
-const schedules = [
-  { month:'Tháng 5/2025', courses:[
-    { name:'Sơ Cấp 1', date:'05/05', days:'T2–T4–T6', time:'19:30–21:30', slots:7 },
-    { name:'Trung Cấp 3', date:'07/05', days:'T3–T5–T7', time:'19:30–21:30', slots:5 },
-    { name:'Giao Tiếp Ứng Dụng', date:'10/05', days:'T2–T4–T6', time:'21:30–23:30', slots:3 },
-  ]},
-  { month:'Tháng 6/2025', courses:[
-    { name:'TOPIK II Cấp 3–4', date:'02/06', days:'T2–T4–T6', time:'19:30–21:30', slots:6 },
-    { name:'Sơ Cấp 2', date:'04/06', days:'T3–T5–T7', time:'19:30–21:30', slots:8 },
-    { name:'Ôn thi THPT Quốc Gia', date:'09/06', days:'T2–T4–T6', time:'19:30–21:30', slots:4 },
-  ]},
 ];
 
 const classes = [
@@ -96,7 +82,6 @@ async function seed() {
     Admin.deleteMany({}),
     Course.deleteMany({}),
     Teacher.deleteMany({}),
-    Schedule.deleteMany({}),
     Class.deleteMany({}),
     Student.deleteMany({}),
     Revenue.deleteMany({}),
@@ -109,7 +94,6 @@ async function seed() {
   await Admin.create(admins);
   await Course.insertMany(courses);
   await Teacher.insertMany(teachers);
-  await Schedule.insertMany(schedules);
   const insertedClasses = await Class.insertMany(classes);
   await Revenue.insertMany(revenues);
   await Registration.insertMany(registrations);

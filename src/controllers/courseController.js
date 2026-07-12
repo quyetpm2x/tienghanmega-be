@@ -7,6 +7,16 @@ exports.getAll = async (req, res) => {
   const filter = req.admin ? {} : { isActive: true };
   if (cat && cat !== 'all') filter.cat = cat;
   const courses = await Course.find(filter).sort({ slug: 1 });
+
+  // Courses with an explicit order come first (ascending); everything else
+  // keeps the default slug order — same pattern used for class ordering.
+  courses.sort((a, b) => {
+    if (a.order != null && b.order != null) return a.order - b.order;
+    if (a.order != null) return -1;
+    if (b.order != null) return 1;
+    return 0;
+  });
+
   success(res, courses);
 };
 

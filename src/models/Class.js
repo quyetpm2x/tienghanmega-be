@@ -13,6 +13,12 @@ const classSchema = new mongoose.Schema({
   status: { type: String, enum: ['active', 'upcoming', 'closed'], default: 'upcoming' },
   color: String,
   note: { type: String, default: '' },
+  promo: { type: String, default: '' },
+  showOnHomepage: { type: Boolean, default: false },
+  homepageOrder: { type: Number, default: null },
+  showOnSchedule: { type: Boolean, default: true },
+  scheduleOrder: { type: Number, default: null },
+  adminOrder: { type: Number, default: null },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Class', classSchema);

@@ -3,7 +3,17 @@ const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
 exports.getAll = async (req, res) => {
-  const teachers = await Teacher.find({ isActive: true });
+  const teachers = await Teacher.find({ isActive: true }).sort({ createdAt: 1 });
+
+  // Teachers with an explicit order come first (ascending); everything else
+  // keeps the default creation order — same pattern used for class/course ordering.
+  teachers.sort((a, b) => {
+    if (a.order != null && b.order != null) return a.order - b.order;
+    if (a.order != null) return -1;
+    if (b.order != null) return 1;
+    return 0;
+  });
+
   success(res, teachers);
 };
 

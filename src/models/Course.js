@@ -34,6 +34,7 @@ const courseSchema = new mongoose.Schema({
   },
   image: String,
   isActive: { type: Boolean, default: true },
+  order: { type: Number, default: null },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Course', courseSchema);
