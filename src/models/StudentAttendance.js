@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 // records[] = each student's attendance for that session
 const studentAttendanceSchema = new mongoose.Schema({
   className:  { type: String, required: true },
+  teacherId:  { type: mongoose.Schema.Types.ObjectId, ref: 'Teacher', default: null },
   date:       { type: String, required: true },   // "2026-05-20"
   sessionNum: { type: Number, default: 1 },        // buổi số mấy
   note:         { type: String, default: '' },        // ghi chú buổi học

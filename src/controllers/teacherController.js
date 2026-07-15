@@ -2,8 +2,14 @@ const Teacher = require('../models/Teacher');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
+// totalPaidSalary/phone/adminNote are HR-only — never exposed on the
+// public (unauthenticated) teacher endpoints, only when req.admin is set.
+const SENSITIVE_FIELDS = '-totalPaidSalary -phone -adminNote';
+
 exports.getAll = async (req, res) => {
-  const teachers = await Teacher.find({ isActive: true }).sort({ createdAt: 1 });
+  const query = Teacher.find({ isActive: true }).sort({ createdAt: 1 });
+  if (!req.admin) query.select(SENSITIVE_FIELDS);
+  const teachers = await query;
 
   // Teachers with an explicit order come first (ascending); everything else
   // keeps the default creation order — same pattern used for class/course ordering.
@@ -18,7 +24,9 @@ exports.getAll = async (req, res) => {
 };
 
 exports.getOne = async (req, res, next) => {
-  const teacher = await Teacher.findById(req.params.id);
+  const query = Teacher.findById(req.params.id);
+  if (!req.admin) query.select(SENSITIVE_FIELDS);
+  const teacher = await query;
   if (!teacher) return next(new AppError('Không tìm thấy giảng viên', 404));
   success(res, teacher);
 };

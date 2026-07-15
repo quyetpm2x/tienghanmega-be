@@ -11,7 +11,6 @@ const teacherSchema = new mongoose.Schema({
   isActive: { type: Boolean, default: true },
   // admin extended fields
   classes: [String],
-  salary: Number,
   phone: String,
   rating: { type: Number, default: 5.0 },
   startDate: String,

@@ -1,9 +1,19 @@
 const Class = require('../models/Class');
 const Student = require('../models/Student');
+const Teacher = require('../models/Teacher');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
 const MAX_HOMEPAGE_CLASSES = 5;
+
+// Class.teacher is a plain name string picked from a dropdown in the admin
+// form — resolve it to a Teacher._id so the teacher portal can scope queries
+// by identity instead of by fragile name matching.
+async function resolveTeacherId(teacherName) {
+  if (!teacherName) return null;
+  const teacher = await Teacher.findOne({ name: teacherName }).select('_id');
+  return teacher ? teacher._id : null;
+}
 
 // Class.enrolled is a stored field with no code path that keeps it in sync — attach
 // the real Student count instead, so every consumer (admin list, edit form, public
@@ -54,7 +64,8 @@ exports.create = async (req, res, next) => {
     const count = await Class.countDocuments({ showOnHomepage: true });
     if (count >= MAX_HOMEPAGE_CLASSES) return next(new AppError('Đã đạt tối đa 5 lớp hiển thị banner homepage', 400));
   }
-  const cls = await Class.create(req.body);
+  const teacherId = await resolveTeacherId(req.body.teacher);
+  const cls = await Class.create({ ...req.body, teacherId });
   success(res, cls, 'Tạo lớp học thành công', 201);
 };
 
@@ -67,7 +78,9 @@ exports.update = async (req, res, next) => {
       if (count >= MAX_HOMEPAGE_CLASSES) return next(new AppError('Đã đạt tối đa 5 lớp hiển thị banner homepage', 400));
     }
   }
-  const cls = await Class.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+  const body = { ...req.body };
+  if ('teacher' in body) body.teacherId = await resolveTeacherId(body.teacher);
+  const cls = await Class.findByIdAndUpdate(req.params.id, body, { new: true, runValidators: true });
   if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
   success(res, cls, 'Cập nhật thành công');
 };

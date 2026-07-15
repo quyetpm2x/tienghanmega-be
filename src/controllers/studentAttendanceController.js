@@ -1,5 +1,6 @@
 const StudentAttendance = require('../models/StudentAttendance');
 const Student = require('../models/Student');
+const Class = require('../models/Class');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
@@ -28,7 +29,8 @@ exports.create = async (req, res) => {
     }));
   }
 
-  const session = await StudentAttendance.create({ className, date, sessionNum: sessionNum || 1, note: note || '', records: finalRecords });
+  const cls = await Class.findOne({ name: className }).select('teacherId');
+  const session = await StudentAttendance.create({ className, teacherId: cls?.teacherId || null, date, sessionNum: sessionNum || 1, note: note || '', records: finalRecords });
   success(res, session, 'Tạo buổi điểm danh thành công', 201);
 };
 

@@ -5,9 +5,9 @@ const { success } = require('../utils/response');
 const dayLabel = (days) => (days || '').split(',').map(s => s.trim()).filter(Boolean).join('–');
 
 exports.getAll = async (req, res) => {
-  // showOnSchedule defaults to true; use $ne:false so classes created before this field
-  // existed (which have no showOnSchedule stored at all) still show up.
-  const classes = await Class.find({ status: 'upcoming', showOnSchedule: { $ne: false } }).sort({ startDate: 1 });
+  // showOnSchedule now defaults to false — chỉ lớp được admin bật rõ ràng mới hiện ở
+  // homepage, nên chỉ khớp showOnSchedule === true (không dùng $ne:false nữa).
+  const classes = await Class.find({ status: 'upcoming', showOnSchedule: true }).sort({ startDate: 1 });
 
   // Classes with an explicit scheduleOrder come first (ascending), keeping their
   // relative startDate order among themselves; unordered ones keep their startDate order.

@@ -16,8 +16,10 @@ router.use('/faqs', require('./faqs'));
 router.use('/levels', require('./levels'));
 router.use('/materials', require('./materials'));
 router.use('/stories', require('./stories'));
+router.use('/success-videos', require('./successVideos'));
 router.use('/vocab', require('./vocab'));
 router.use('/topik-questions', require('./topik-questions'));
+router.use('/teacher-portal', require('./teacherPortal'));
 router.use('/admin', require('./admin'));
 
 module.exports = router;
