@@ -20,6 +20,7 @@ router.use('/stories', require('./stories'));
 router.use('/success-videos', require('./successVideos'));
 router.use('/community-links', require('./communityLinks'));
 router.use('/feedback-videos', require('./feedbackVideos'));
+router.use('/feedback-images', require('./feedbackImages'));
 router.use('/vocab', require('./vocab'));
 router.use('/topik-questions', require('./topik-questions'));
 router.use('/teacher-portal', require('./teacherPortal'));

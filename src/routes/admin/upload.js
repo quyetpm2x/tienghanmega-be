@@ -5,7 +5,7 @@ const { put } = require('@vercel/blob');
 const { success } = require('../../utils/response');
 const AppError = require('../../utils/AppError');
 
-const ALLOWED_FOLDERS = ['materials', 'teachers', 'general', 'courses', 'community'];
+const ALLOWED_FOLDERS = ['materials', 'teachers', 'general', 'courses', 'community', 'feedback'];
 
 // Giữ file trong RAM (không ghi ra đĩa cục bộ) — đĩa của server (Railway/Vercel...) không
 // bền vững qua các lần deploy, nên ảnh phải đẩy thẳng lên Vercel Blob (storage bên ngoài).

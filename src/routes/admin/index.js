@@ -29,5 +29,6 @@ router.use('/payroll-settings', require('./payrollSettings'));
 router.use('/success-videos', require('./successVideos'));
 router.use('/community-links', require('./communityLinks'));
 router.use('/feedback-videos', require('./feedbackVideos'));
+router.use('/feedback-images', require('./feedbackImages'));
 
 module.exports = router;
