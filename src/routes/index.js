@@ -8,6 +8,7 @@ router.get('/health', (req, res) => {
 router.use('/ip', require('./ip'));
 router.use('/auth', require('./auth'));
 router.use('/courses', require('./courses'));
+router.use('/course-categories', require('./courseCategories'));
 router.use('/classes', require('./classes'));
 router.use('/teachers', require('./teachers'));
 router.use('/schedule', require('./schedule'));
@@ -17,6 +18,8 @@ router.use('/levels', require('./levels'));
 router.use('/materials', require('./materials'));
 router.use('/stories', require('./stories'));
 router.use('/success-videos', require('./successVideos'));
+router.use('/community-links', require('./communityLinks'));
+router.use('/feedback-videos', require('./feedbackVideos'));
 router.use('/vocab', require('./vocab'));
 router.use('/topik-questions', require('./topik-questions'));
 router.use('/teacher-portal', require('./teacherPortal'));

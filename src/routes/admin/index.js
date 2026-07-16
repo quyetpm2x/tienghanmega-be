@@ -10,6 +10,7 @@ router.get('/visitors', require('../../controllers/ipController').getVisitors);
 router.use('/students', require('./students'));
 router.use('/classes', require('./classes'));
 router.use('/courses', require('./courses'));
+router.use('/course-categories', require('./courseCategories'));
 router.use('/materials', require('./materials'));
 router.use('/student-attendance', require('./studentAttendance'));
 router.use('/upload',    require('./upload'));
@@ -26,5 +27,7 @@ router.use('/teacher-bonuses', require('./teacherBonuses'));
 router.use('/teacher-payments', require('./teacherPayments'));
 router.use('/payroll-settings', require('./payrollSettings'));
 router.use('/success-videos', require('./successVideos'));
+router.use('/community-links', require('./communityLinks'));
+router.use('/feedback-videos', require('./feedbackVideos'));
 
 module.exports = router;

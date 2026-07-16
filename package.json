@@ -22,6 +22,7 @@
   },
   "homepage": "https://github.com/quyetpm2x/tienghanmega-be#readme",
   "dependencies": {
+    "@vercel/blob": "^2.6.1",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "16.4.5",

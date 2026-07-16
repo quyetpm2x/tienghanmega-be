@@ -9,7 +9,9 @@ const courseSchema = new mongoose.Schema({
   students: { type: Number, default: 0 },
   rating: { type: Number, default: 5.0 },
   price: String,
-  cat: { type: String, enum: ['beginner', 'topik', 'conversation', 'bundle'] },
+  // Khớp với CourseCategory.key — không dùng enum cứng để admin thêm/xoá danh mục
+  // qua /admin/courses (tab Danh mục) mà không cần deploy lại code.
+  cat: { type: String },
   bg: String,
   char: String,
   instructor: String,

@@ -1,29 +1,16 @@
 const router = require('express').Router();
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
+const { put } = require('@vercel/blob');
 const { success } = require('../../utils/response');
 const AppError = require('../../utils/AppError');
 
-const BASE_DIR = path.join(__dirname, '../../../public/uploads');
-const ALLOWED_FOLDERS = ['materials', 'teachers', 'general', 'courses'];
+const ALLOWED_FOLDERS = ['materials', 'teachers', 'general', 'courses', 'community'];
 
-const storage = multer.diskStorage({
-  destination: (req, _file, cb) => {
-    const folder = ALLOWED_FOLDERS.includes(req.query.folder) ? req.query.folder : 'general';
-    const dir = path.join(BASE_DIR, folder);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (_req, file, cb) => {
-    const ext  = path.extname(file.originalname).toLowerCase();
-    const name = `${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`;
-    cb(null, name);
-  },
-});
-
+// Giữ file trong RAM (không ghi ra đĩa cục bộ) — đĩa của server (Railway/Vercel...) không
+// bền vững qua các lần deploy, nên ảnh phải đẩy thẳng lên Vercel Blob (storage bên ngoài).
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const ok = /^image\/(jpeg|jpg|png|gif|webp|svg\+xml)$/.test(file.mimetype);
@@ -31,11 +18,21 @@ const upload = multer({
   },
 });
 
-router.post('/', upload.single('image'), (req, res) => {
+router.post('/', upload.single('image'), async (req, res, next) => {
   if (!req.file) return res.status(400).json({ success: false, message: 'Không có file nào được upload' });
-  const folder = ALLOWED_FOLDERS.includes(req.query.folder) ? req.query.folder : 'general';
-  const url = `/uploads/${folder}/${req.file.filename}`;
-  success(res, { url }, 'Upload thành công');
+  try {
+    const folder = ALLOWED_FOLDERS.includes(req.query.folder) ? req.query.folder : 'general';
+    const ext  = path.extname(req.file.originalname).toLowerCase();
+    const name = `${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`;
+    await put(`${folder}/${name}`, req.file.buffer, {
+      access: 'public',
+      contentType: req.file.mimetype,
+    });
+    // Trả về path tương đối (/cdn/...) thay vì URL vercel-storage.com trực tiếp — FE có
+    // rewrite /cdn/:path* proxy sang Blob storage (xem next.config.js), giúp ảnh hiển thị
+    // qua domain chính vì Vercel Blob chưa hỗ trợ gắn custom domain.
+    success(res, { url: `/cdn/${folder}/${name}` }, 'Upload thành công');
+  } catch (err) { next(err); }
 });
 
 module.exports = router;
