@@ -79,3 +79,44 @@ exports.changeTeacherPassword = async (req, res, next) => {
   await account.save();
   success(res, null, 'Đổi mật khẩu thành công');
 };
+
+exports.studentLogin = async (req, res, next) => {
+  const { username, password } = req.body;
+  if (!username || !password) return next(new AppError('Vui lòng nhập tài khoản và mật khẩu', 400));
+
+  const account = await Account.findOne({ username, isActive: true, role: 'student' }).populate('studentId');
+  if (!account || !(await account.comparePassword(password))) {
+    return next(new AppError('Tài khoản hoặc mật khẩu không đúng', 401));
+  }
+
+  const token = signToken(account._id, { role: 'student' });
+  success(res, {
+    token,
+    account: {
+      id: account._id,
+      username: account.username,
+      mustChangePassword: account.mustChangePassword,
+      student: account.studentId ? { id: account.studentId._id, name: account.studentId.name } : null,
+    },
+  }, 'Đăng nhập thành công');
+};
+
+exports.studentMe = async (req, res) => {
+  success(res, { account: req.studentAccount });
+};
+
+exports.changeStudentPassword = async (req, res, next) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) return next(new AppError('Vui lòng nhập đầy đủ thông tin', 400));
+  if (newPassword.length < 6) return next(new AppError('Mật khẩu mới phải có ít nhất 6 ký tự', 400));
+
+  const account = await Account.findById(req.studentAccount._id);
+  if (!(await account.comparePassword(currentPassword))) {
+    return next(new AppError('Mật khẩu hiện tại không đúng', 400));
+  }
+
+  account.password = newPassword;
+  account.mustChangePassword = false;
+  await account.save();
+  success(res, null, 'Đổi mật khẩu thành công');
+};

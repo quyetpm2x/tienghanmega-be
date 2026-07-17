@@ -1,6 +1,7 @@
 const Class = require('../models/Class');
 const Student = require('../models/Student');
 const StudentAttendance = require('../models/StudentAttendance');
+const Account = require('../models/Account');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
@@ -10,14 +11,6 @@ const AppError = require('../utils/AppError');
 
 // Whitelist — never leak price/promo/homepage-display config to a teacher.
 const CLASS_FIELDS = 'name course days time capacity startDate endDate status color';
-
-// "Hôm nay" theo giờ Việt Nam (UTC+7, không có DST) — không dùng
-// new Date().toISOString() vì đó là giờ UTC và phụ thuộc timezone của server,
-// gây lệch 1 ngày vào khoảng 00:00–06:59 giờ VN.
-function todayVN() {
-  const vn = new Date(Date.now() + 7 * 60 * 60 * 1000);
-  return vn.toISOString().slice(0, 10);
-}
 
 exports.getMyClasses = async (req, res) => {
   const teacherId = req.teacherAccount.teacherId._id;
@@ -33,14 +26,153 @@ exports.getMyClass = async (req, res, next) => {
   success(res, cls);
 };
 
+// Tên các lớp giáo viên đang dạy — dùng làm phạm vi truy cập cho toàn bộ các
+// hàm bên dưới liên quan tới học sinh/tài khoản học sinh của giáo viên này.
+async function myClassNames(teacherId) {
+  const classes = await Class.find({ teacherId }).select('name');
+  return classes.map(c => c.name);
+}
+
+// Xác nhận 1 học sinh thuộc lớp giáo viên này đang dạy — trả về null nếu
+// không thuộc (dùng để chặn giáo viên sửa/xem học sinh của lớp khác).
+async function assertOwnStudent(teacherId, studentId) {
+  const classNames = await myClassNames(teacherId);
+  return Student.findOne({ _id: studentId, className: { $in: classNames } });
+}
+
+// Toàn bộ học sinh thuộc các lớp giáo viên đang dạy (dùng cho tab "Quản lý học
+// sinh") — giáo viên được xem/sửa thông tin cơ bản + ghi chú (không có
+// học phí/số tiền — vẫn giữ riêng cho admin).
+exports.getMyStudents = async (req, res) => {
+  const teacherId = req.teacherAccount.teacherId._id;
+  const classNames = await myClassNames(teacherId);
+  const students = await Student.find({ className: { $in: classNames } }).select('name phone email className status note').sort({ name: 1 });
+  success(res, students);
+};
+
+// Giáo viên sửa thông tin cơ bản + ghi chú của học sinh lớp mình — KHÔNG được
+// sửa học phí/số tiền/chuyển lớp (vẫn là nghiệp vụ riêng của admin).
+exports.updateMyStudent = async (req, res, next) => {
+  const teacherId = req.teacherAccount.teacherId._id;
+  const student = await assertOwnStudent(teacherId, req.params.id);
+  if (!student) return next(new AppError('Không tìm thấy học sinh', 404));
+
+  const { name, phone, email, note } = req.body;
+  const body = {};
+  if (name !== undefined) body.name = name;
+  if (phone !== undefined) body.phone = phone;
+  if (email !== undefined) body.email = email;
+  if (note !== undefined) body.note = note;
+
+  const updated = await Student.findByIdAndUpdate(req.params.id, body, { new: true, runValidators: true })
+    .select('name phone email className status note');
+  success(res, updated, 'Cập nhật thành công');
+};
+
+// ── Tài khoản đăng nhập của học sinh — giáo viên được xem/tạo/reset mật khẩu/
+// khoá, scoped theo đúng học sinh thuộc lớp mình dạy. Không có hàm xoá (giống
+// admin) — chỉ khoá (isActive=false), giữ nguyên lịch sử điểm/học phí.
+exports.getMyStudentAccounts = async (req, res) => {
+  const teacherId = req.teacherAccount.teacherId._id;
+  const classNames = await myClassNames(teacherId);
+  const students = await Student.find({ className: { $in: classNames } }).select('_id');
+  const studentIds = students.map(s => s._id);
+
+  const accounts = await Account.find({ studentId: { $in: studentIds }, role: 'student' })
+    .select('-password +passwordPlainEnc').populate('studentId', 'name className');
+  const result = accounts.map(a => {
+    const obj = a.toObject();
+    obj.passwordPlain = a.getPlainPassword();
+    delete obj.passwordPlainEnc;
+    return obj;
+  });
+  success(res, result);
+};
+
+exports.createMyStudentAccount = async (req, res, next) => {
+  const teacherId = req.teacherAccount.teacherId._id;
+  const { studentId, username, password } = req.body;
+  if (!studentId || !username || !password) return next(new AppError('Vui lòng nhập đầy đủ thông tin', 400));
+  if (password.length < 6) return next(new AppError('Mật khẩu phải có ít nhất 6 ký tự', 400));
+
+  const student = await assertOwnStudent(teacherId, studentId);
+  if (!student) return next(new AppError('Không tìm thấy học sinh', 404));
+
+  const existing = await Account.findOne({ studentId, role: 'student' });
+  if (existing) return next(new AppError('Học viên này đã có tài khoản', 400));
+
+  const account = await Account.create({ studentId, username, password, role: 'student' });
+  const safe = await Account.findById(account._id).select('-password +passwordPlainEnc').populate('studentId', 'name className');
+  const obj = safe.toObject();
+  obj.passwordPlain = safe.getPlainPassword();
+  delete obj.passwordPlainEnc;
+  success(res, obj, 'Tạo tài khoản thành công', 201);
+};
+
+exports.resetMyStudentAccountPassword = async (req, res, next) => {
+  const teacherId = req.teacherAccount.teacherId._id;
+  const { password } = req.body;
+  if (!password || password.length < 6) return next(new AppError('Mật khẩu phải có ít nhất 6 ký tự', 400));
+
+  const account = await Account.findOne({ _id: req.params.id, role: 'student' });
+  if (!account) return next(new AppError('Không tìm thấy tài khoản', 404));
+  const student = await assertOwnStudent(teacherId, account.studentId);
+  if (!student) return next(new AppError('Không tìm thấy tài khoản', 404));
+
+  account.password = password;
+  account.mustChangePassword = true;
+  await account.save();
+  success(res, null, 'Đặt lại mật khẩu thành công');
+};
+
+exports.updateMyStudentAccount = async (req, res, next) => {
+  const teacherId = req.teacherAccount.teacherId._id;
+  const account = await Account.findOne({ _id: req.params.id, role: 'student' });
+  if (!account) return next(new AppError('Không tìm thấy tài khoản', 404));
+  const student = await assertOwnStudent(teacherId, account.studentId);
+  if (!student) return next(new AppError('Không tìm thấy tài khoản', 404));
+
+  const { username, isActive } = req.body;
+  const body = {};
+  if (username !== undefined) body.username = username;
+  if (isActive !== undefined) body.isActive = isActive;
+
+  const updated = await Account.findByIdAndUpdate(req.params.id, body, { new: true, runValidators: true })
+    .select('-password +passwordPlainEnc').populate('studentId', 'name className');
+  const obj = updated.toObject();
+  obj.passwordPlain = updated.getPlainPassword();
+  delete obj.passwordPlainEnc;
+  success(res, obj, 'Cập nhật thành công');
+};
+
 // Roster for taking attendance — name only, never the admin-facing fields
-// (phone/tuition/note/amount) which a teacher has no need to see.
+// (phone/tuition/note/amount) which a teacher has no need to see. Kèm tài
+// khoản đăng nhập (nếu học sinh đã được cấp) — mật khẩu chỉ trả về khi học
+// sinh CHƯA tự đổi (mustChangePassword=true), để giáo viên đọc cho học sinh
+// trong buổi đầu; sau khi học sinh tự đổi, giáo viên không còn xem được nữa.
 exports.getClassStudents = async (req, res, next) => {
   const teacherId = req.teacherAccount.teacherId._id;
   const cls = await Class.findOne({ _id: req.params.id, teacherId }).select('name');
   if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
   const students = await Student.find({ className: cls.name, status: 'active' }).select('name').sort({ name: 1 });
-  success(res, students);
+
+  const accounts = await Account.find({ studentId: { $in: students.map(s => s._id) }, role: 'student' })
+    .select({ studentId: 1, username: 1, mustChangePassword: 1, passwordPlainEnc: 1 });
+  const accountByStudent = new Map(accounts.map(a => [String(a.studentId), a]));
+
+  const result = students.map(s => {
+    const acc = accountByStudent.get(String(s._id));
+    return {
+      _id: s._id,
+      name: s.name,
+      account: acc ? {
+        username: acc.username,
+        password: acc.mustChangePassword ? acc.getPlainPassword() : null,
+        mustChangePassword: acc.mustChangePassword,
+      } : null,
+    };
+  });
+  success(res, result);
 };
 
 exports.getMyAttendance = async (req, res, next) => {
@@ -66,11 +198,6 @@ exports.createAttendance = async (req, res, next) => {
   if (!finalRecords || finalRecords.length === 0) {
     const students = await Student.find({ className, status: 'active' });
     finalRecords = students.map(s => ({ studentId: s._id, studentName: s.name, status: 'present', note: '' }));
-  } else if (date < todayVN()) {
-    // Buổi đã qua ngày — giáo viên không được set trạng thái điểm danh (chỉ admin
-    // mới sửa được, tránh chỉnh sửa hồi tố ảnh hưởng tới lương tính theo buổi dạy).
-    // Ghi chú (note) vẫn được giữ nguyên từ client.
-    finalRecords = finalRecords.map(r => ({ ...r, status: 'present' }));
   }
 
   const session = await StudentAttendance.create({ className, teacherId, date, sessionNum: sessionNum || 1, note: note || '', records: finalRecords });
@@ -88,16 +215,7 @@ exports.updateAttendance = async (req, res, next) => {
   if (date !== undefined) body.date = date;
   if (sessionNum !== undefined) body.sessionNum = sessionNum;
   if (note !== undefined) body.note = note;
-  if (records !== undefined) {
-    const isPast = existing.date < todayVN();
-    // Buổi đã qua ngày — chỉ cho cập nhật ghi chú, giữ nguyên trạng thái điểm danh cũ.
-    body.records = isPast
-      ? records.map(r => {
-          const orig = existing.records.find(o => String(o.studentId) === String(r.studentId));
-          return { ...r, status: orig ? orig.status : r.status };
-        })
-      : records;
-  }
+  if (records !== undefined) body.records = records;
 
   const session = await StudentAttendance.findByIdAndUpdate(req.params.id, body, { new: true });
   success(res, session, 'Cập nhật thành công');

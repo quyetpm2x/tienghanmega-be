@@ -23,6 +23,7 @@ router.use('/levels', require('./levels'));
 router.use('/registrations', require('../registrations'));
 router.use('/teachers', require('../teachers'));
 router.use('/teacher-accounts', require('./teacherAccounts'));
+router.use('/student-accounts', require('./studentAccounts'));
 router.use('/teacher-bonuses', require('./teacherBonuses'));
 router.use('/teacher-payments', require('./teacherPayments'));
 router.use('/payroll-settings', require('./payrollSettings'));

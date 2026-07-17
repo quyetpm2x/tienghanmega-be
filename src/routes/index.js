@@ -24,6 +24,7 @@ router.use('/feedback-images', require('./feedbackImages'));
 router.use('/vocab', require('./vocab'));
 router.use('/topik-questions', require('./topik-questions'));
 router.use('/teacher-portal', require('./teacherPortal'));
+router.use('/student-portal', require('./studentPortal'));
 router.use('/admin', require('./admin'));
 
 module.exports = router;
