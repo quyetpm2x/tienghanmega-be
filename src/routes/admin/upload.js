@@ -5,7 +5,7 @@ const { put } = require('@vercel/blob');
 const { success } = require('../../utils/response');
 const AppError = require('../../utils/AppError');
 
-const ALLOWED_FOLDERS = ['materials', 'teachers', 'general', 'courses', 'community', 'feedback'];
+const ALLOWED_FOLDERS = ['materials', 'teachers', 'general', 'courses', 'community', 'feedback', 'tests'];
 
 // Giữ file trong RAM (không ghi ra đĩa cục bộ) — đĩa của server (Railway/Vercel...) không
 // bền vững qua các lần deploy, nên ảnh phải đẩy thẳng lên Vercel Blob (storage bên ngoài).
@@ -15,6 +15,17 @@ const upload = multer({
   fileFilter: (_req, file, cb) => {
     const ok = /^image\/(jpeg|jpg|png|gif|webp|svg\+xml)$/.test(file.mimetype);
     ok ? cb(null, true) : cb(new AppError('Chỉ chấp nhận file ảnh (jpg, png, gif, webp, svg)', 400));
+  },
+});
+
+// Upload audio riêng cho câu hỏi dạng Nghe (ngân hàng câu hỏi kiểm tra) — file
+// lớn hơn ảnh nên giới hạn dung lượng cao hơn, luôn lưu vào folder 'tests'.
+const uploadAudio = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = /^audio\/(mpeg|mp3|wav|x-wav|ogg|webm)$/.test(file.mimetype);
+    ok ? cb(null, true) : cb(new AppError('Chỉ chấp nhận file âm thanh (mp3, wav, ogg)', 400));
   },
 });
 
@@ -32,6 +43,19 @@ router.post('/', upload.single('image'), async (req, res, next) => {
     // rewrite /cdn/:path* proxy sang Blob storage (xem next.config.js), giúp ảnh hiển thị
     // qua domain chính vì Vercel Blob chưa hỗ trợ gắn custom domain.
     success(res, { url: `/cdn/${folder}/${name}` }, 'Upload thành công');
+  } catch (err) { next(err); }
+});
+
+router.post('/audio', uploadAudio.single('audio'), async (req, res, next) => {
+  if (!req.file) return res.status(400).json({ success: false, message: 'Không có file nào được upload' });
+  try {
+    const ext  = path.extname(req.file.originalname).toLowerCase() || '.mp3';
+    const name = `${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`;
+    await put(`tests/${name}`, req.file.buffer, {
+      access: 'public',
+      contentType: req.file.mimetype,
+    });
+    success(res, { url: `/cdn/tests/${name}` }, 'Upload thành công');
   } catch (err) { next(err); }
 });
 

@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { protectTeacher } = require('../../middlewares/auth');
 const ctrl = require('../../controllers/teacherPortalController');
+const testCtrl = require('../../controllers/teacherTestController');
 
 // All teacher-portal routes require a teacher (not admin) token.
 router.use(protectTeacher);
@@ -17,5 +18,16 @@ router.put('/student-accounts/:id', ctrl.updateMyStudentAccount);
 router.get('/attendance', ctrl.getMyAttendance);
 router.post('/attendance', ctrl.createAttendance);
 router.put('/attendance/:id', ctrl.updateAttendance);
+
+// Bài kiểm tra: admin tạo phiên (chọn lớp + chọn đề), giáo viên chỉ đặt giờ/
+// mở/đóng phiên, xem điểm + bài làm — không được tạo phiên hay đổi đề.
+router.get('/test-sessions',              testCtrl.getSessions);
+router.get('/test-sessions/:id',          testCtrl.getSession);
+router.put('/test-sessions/:id',          testCtrl.updateSession);
+router.put('/test-sessions/:id/close',    testCtrl.closeSession);
+router.put('/test-sessions/:id/reopen',   testCtrl.reopenSession);
+router.get('/test-sessions/:id/results',  testCtrl.getSessionResults);
+router.put('/test-sessions/:id/disqualify', testCtrl.setDisqualified);
+router.get('/test-attempts/:attemptId',   testCtrl.getAttemptDetail);
 
 module.exports = router;
