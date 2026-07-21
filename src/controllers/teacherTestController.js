@@ -139,10 +139,13 @@ exports.getSessionResults = async (req, res, next) => {
       attemptCount: a ? a.attemptCount : 0,
       submittedAt: a ? a.submittedAt : null,
       autoSubmitted: a ? a.autoSubmitted : false,
+      tabSwitchCount: a ? a.tabSwitchCount : 0,
+      pendingManualGrading: a ? a.pendingManualGrading : false,
       attempts: list.map(x => ({
         attemptId: x._id, attemptCount: x.attemptCount, testId: x.testId,
         score: x.score, totalPoints: x.totalPoints, submittedAt: x.submittedAt,
-        autoSubmitted: x.autoSubmitted, disqualified: x.disqualified,
+        autoSubmitted: x.autoSubmitted, disqualified: x.disqualified, tabSwitchCount: x.tabSwitchCount,
+        pendingManualGrading: x.pendingManualGrading,
       })),
     };
   }).sort((x, y) => (y.score ?? -1) - (x.score ?? -1));
@@ -203,12 +206,21 @@ exports.getAttemptDetail = async (req, res, next) => {
     const q = questionMap.get(String(qid));
     const ans = attempt.answers.find(a => String(a.questionId) === String(qid));
     if (!q || !ans) return null;
+    if (ans.questionType === 'essay') {
+      return {
+        questionId: q._id, questionType: 'essay', question: q.question, image: q.image, audioUrl: q.audioUrl,
+        textAnswer: ans.textAnswer, imageAnswer: ans.imageAnswer, audioAnswer: ans.audioAnswer,
+        manualScore: ans.manualScore, points: typeof ans.points === 'number' ? ans.points : (testPointsMap.get(String(qid)) || 0),
+        explanation: q.explanation,
+      };
+    }
     const shuffledOptions = ans.optionOrder.map(i => q.options[i]);
     // Dùng lại đúng snapshot đã dùng để CHẤM điểm — tránh hiển thị "đáp án
     // đúng" khác với đáp án đã thực sự dùng để tính ra attempt.score.
     const { correctIndices, points } = resolveGrading(ans, q, testPointsMap.get(String(qid)));
     return {
       questionId: q._id,
+      questionType: 'multiple_choice',
       question: q.question,
       image: q.image,
       audioUrl: q.audioUrl,
@@ -229,6 +241,63 @@ exports.getAttemptDetail = async (req, res, next) => {
     startedAt: attempt.startedAt,
     submittedAt: attempt.submittedAt,
     autoSubmitted: attempt.autoSubmitted,
+    tabSwitchCount: attempt.tabSwitchCount,
+    pendingManualGrading: attempt.pendingManualGrading,
     questions: detail,
   });
+};
+
+// Chấm tay các câu tự luận trong 1 bài làm — nhận danh sách {questionId, score},
+// ghi đè manualScore cho từng câu, rồi tính lại TOÀN BỘ điểm attempt (trắc
+// nghiệm chấm lại qua resolveGrading như cũ, tự luận cộng thẳng manualScore đã
+// chấm) để đảm bảo score luôn nhất quán dù chấm nhiều lần/sửa điểm.
+exports.gradeAttempt = async (req, res, next) => {
+  const teacherId = req.teacherAccount.teacherId._id;
+  const attempt = await TestAttempt.findById(req.params.attemptId);
+  if (!attempt) return next(new AppError('Không tìm thấy bài làm', 404));
+  const session = await TestSession.findById(attempt.sessionId);
+  if (!session) return next(new AppError('Không tìm thấy bài làm', 404));
+  const owns = await assertOwnClass(teacherId, session.classId);
+  if (!owns) return next(new AppError('Không tìm thấy bài làm', 404));
+  if (!attempt.submittedAt) return next(new AppError('Học sinh chưa nộp bài, chưa thể chấm', 400));
+
+  const { grades } = req.body; // [{ questionId, score }]
+  if (!Array.isArray(grades) || !grades.length) return next(new AppError('Thiếu dữ liệu chấm điểm', 400));
+  const gradeMap = new Map(grades.map(g => [String(g.questionId), g.score]));
+
+  const needsLiveLookup = attempt.answers.some(a => typeof a.points !== 'number' || (a.questionType !== 'essay' && (!Array.isArray(a.answerIndices) || a.answerIndices.length === 0)));
+  const questions = needsLiveLookup ? await TestQuestion.find({ _id: { $in: attempt.questionOrder } }) : [];
+  const qMap = new Map(questions.map(q => [String(q._id), q]));
+  const test = needsLiveLookup ? await Test.findById(attempt.testId).select('questions') : null;
+  const testPointsMap = test ? new Map(test.questions.map(q => [String(q.questionId), q.points])) : new Map();
+
+  // Validate điểm chấm hợp lệ TRƯỚC khi ghi đè — tránh ghi nửa chừng nếu có câu điểm sai.
+  for (const a of attempt.answers) {
+    if (a.questionType !== 'essay' || !gradeMap.has(String(a.questionId))) continue;
+    const raw = Number(gradeMap.get(String(a.questionId)));
+    const maxPoints = typeof a.points === 'number' ? a.points : (testPointsMap.get(String(a.questionId)) || 0);
+    if (Number.isNaN(raw) || raw < 0 || raw > maxPoints) {
+      return next(new AppError(`Điểm chấm không hợp lệ (0 - ${maxPoints})`, 400));
+    }
+  }
+
+  let score = 0;
+  let pendingManualGrading = false;
+  attempt.answers = attempt.answers.map(a => {
+    const obj = a.toObject();
+    if (a.questionType === 'essay') {
+      if (gradeMap.has(String(a.questionId))) obj.manualScore = Number(gradeMap.get(String(a.questionId)));
+      if (obj.manualScore === null || obj.manualScore === undefined) pendingManualGrading = true;
+      else score += obj.manualScore;
+      return obj;
+    }
+    const { correctIndices, points } = resolveGrading(a, qMap.get(String(a.questionId)), testPointsMap.get(String(a.questionId)));
+    if (sameIndexSet(a.selectedIndices, correctIndices)) score += points;
+    return obj;
+  });
+  attempt.score = score;
+  attempt.pendingManualGrading = pendingManualGrading;
+  await attempt.save();
+
+  success(res, { score: attempt.score, totalPoints: attempt.totalPoints, pendingManualGrading }, 'Đã lưu điểm chấm');
 };

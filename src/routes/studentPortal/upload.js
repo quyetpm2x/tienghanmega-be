@@ -2,22 +2,20 @@ const router = require('express').Router();
 const { success } = require('../../utils/response');
 const { imageUpload, audioUpload, uploadToBlob } = require('../../utils/uploadHandlers');
 
-const ALLOWED_FOLDERS = ['materials', 'teachers', 'general', 'courses', 'community', 'feedback', 'tests'];
-
-router.post('/', imageUpload.single('image'), async (req, res, next) => {
+// Upload ảnh/audio kèm theo câu trả lời tự luận — folder cố định 'essay-answers',
+// route đã được bảo vệ bởi protectStudent ở router cha (routes/studentPortal/index.js).
+router.post('/image', imageUpload.single('image'), async (req, res, next) => {
   if (!req.file) return res.status(400).json({ success: false, message: 'Không có file nào được upload' });
   try {
-    const folder = ALLOWED_FOLDERS.includes(req.query.folder) ? req.query.folder : 'general';
-    const url = await uploadToBlob(req.file, folder);
+    const url = await uploadToBlob(req.file, 'essay-answers');
     success(res, { url }, 'Upload thành công');
   } catch (err) { next(err); }
 });
 
-// Upload audio riêng cho câu hỏi dạng Nghe (ngân hàng câu hỏi kiểm tra) — luôn lưu vào folder 'tests'.
 router.post('/audio', audioUpload.single('audio'), async (req, res, next) => {
   if (!req.file) return res.status(400).json({ success: false, message: 'Không có file nào được upload' });
   try {
-    const url = await uploadToBlob(req.file, 'tests', '.mp3');
+    const url = await uploadToBlob(req.file, 'essay-answers', '.mp3');
     success(res, { url }, 'Upload thành công');
   } catch (err) { next(err); }
 });

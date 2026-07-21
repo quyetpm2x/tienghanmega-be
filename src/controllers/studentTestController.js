@@ -46,7 +46,7 @@ exports.getMySessions = async (req, res) => {
   // Có thể có nhiều attempt/session (mỗi lần làm lại là 1 document) — chỉ lấy
   // lần MỚI NHẤT để hiển thị trạng thái hiện tại cho học sinh.
   const attempts = await TestAttempt.find({ studentId, sessionId: { $in: sessions.map(s => s._id) } })
-    .select('sessionId testId score totalPoints submittedAt autoSubmitted attemptCount startedAt')
+    .select('sessionId testId score totalPoints submittedAt autoSubmitted attemptCount startedAt pendingManualGrading')
     .sort({ attemptCount: 1 });
   const attemptMap = new Map(attempts.map(a => [String(a.sessionId), a]));
 
@@ -77,6 +77,7 @@ exports.getMySessions = async (req, res) => {
         submittedAt: a.submittedAt,
         autoSubmitted: a.autoSubmitted,
         startedAt: a.startedAt,
+        pendingManualGrading: a.pendingManualGrading,
         durationMin: !a.submittedAt ? (durationMap.get(String(a.testId)) ?? null) : null,
       } : null,
     };
@@ -126,13 +127,19 @@ exports.startAttempt = async (req, res, next) => {
     // Chụp lại đáp án đúng + điểm của từng câu NGAY lúc bắt đầu làm — dùng để
     // chấm điểm sau này thay vì tra cứu lại TestQuestion/Test lúc nộp bài, để
     // việc admin sửa câu hỏi/đề giữa lúc học sinh đang làm không ảnh hưởng điểm.
-    const answers = questionOrder.map(qid => ({
-      questionId: qid,
-      optionOrder: shuffle(qMap.get(String(qid)).options.map((_, i) => i)),
-      selectedIndices: [],
-      answerIndices: qMap.get(String(qid)).answerIndices,
-      points: testPointsMap.get(String(qid)) || 0,
-    }));
+    const answers = questionOrder.map(qid => {
+      const q = qMap.get(String(qid));
+      const isEssay = q.questionType === 'essay';
+      return {
+        questionId: qid,
+        questionType: q.questionType,
+        optionOrder: isEssay ? [] : shuffle(q.options.map((_, i) => i)),
+        selectedIndices: [],
+        answerIndices: isEssay ? [] : q.answerIndices,
+        points: testPointsMap.get(String(qid)) || 0,
+        textAnswer: '', imageAnswer: '', audioAnswer: '', manualScore: null,
+      };
+    });
     const totalPoints = fullTest.questions.reduce((s, q) => s + q.points, 0);
 
     attempt = await TestAttempt.create({
@@ -159,11 +166,16 @@ exports.startAttempt = async (req, res, next) => {
     questions: attempt.questionOrder.map(qid => {
       const q = qMap.get(String(qid));
       const a = answerMap.get(String(qid));
+      if (a.questionType === 'essay') {
+        return {
+          questionId: qid, questionType: 'essay', question: q.question, image: q.image, audioUrl: q.audioUrl,
+          points: a.points,
+          textAnswer: a.textAnswer, imageAnswer: a.imageAnswer, audioAnswer: a.audioAnswer,
+        };
+      }
       return {
-        questionId: qid,
-        question: q.question,
-        image: q.image,
-        audioUrl: q.audioUrl,
+        questionId: qid, questionType: 'multiple_choice', question: q.question, image: q.image, audioUrl: q.audioUrl,
+        points: a.points,
         options: a.optionOrder.map(i => q.options[i]),
         selectedIndices: a.selectedIndices,
         isMultiple: q.answerIndices.length > 1,
@@ -202,15 +214,30 @@ exports.submitAttempt = async (req, res, next) => {
   const testPointsMap = needsLiveLookup ? new Map(test.questions.map(q => [String(q.questionId), q.points])) : new Map();
 
   let score = 0;
+  let pendingManualGrading = false;
   attempt.answers = attempt.answers.map(a => {
-    const selectedIndices = isLate
-      ? (a.selectedIndices || [])
-      : ((answers || []).find(x => String(x.questionId) === String(a.questionId))?.selectedIndices || []);
+    const submitted = (answers || []).find(x => String(x.questionId) === String(a.questionId));
+    // Câu tự luận: không chấm tự động, chỉ lưu lại nội dung học sinh nộp (giữ
+    // nguyên bản autosave gần nhất nếu nộp trễ). Điểm chờ giáo viên/admin chấm
+    // tay qua exports.gradeAttempt — chưa cộng vào score lúc này.
+    if (a.questionType === 'essay') {
+      const obj = a.toObject();
+      if (!isLate && submitted) {
+        obj.textAnswer = submitted.textAnswer || '';
+        obj.imageAnswer = submitted.imageAnswer || '';
+        obj.audioAnswer = submitted.audioAnswer || '';
+      }
+      if (obj.manualScore === null || obj.manualScore === undefined) pendingManualGrading = true;
+      else score += obj.manualScore;
+      return obj;
+    }
+    const selectedIndices = isLate ? (a.selectedIndices || []) : (submitted?.selectedIndices || []);
     const { correctIndices, points } = resolveGrading(a, qMap.get(String(a.questionId)), testPointsMap.get(String(a.questionId)));
     if (sameIndexSet(selectedIndices, correctIndices)) score += points;
     return { ...a.toObject(), selectedIndices };
   });
   attempt.score = score;
+  attempt.pendingManualGrading = pendingManualGrading;
   attempt.submittedAt = new Date();
   attempt.autoSubmitted = isLate ? true : !!autoSubmitted;
   await attempt.save();
@@ -230,14 +257,33 @@ exports.saveProgress = async (req, res, next) => {
   if (attempt.submittedAt) return next(new AppError('Bài làm đã được nộp trước đó', 400));
 
   const { answers } = req.body;
-  const answerMap = new Map((answers || []).map(a => [String(a.questionId), a.selectedIndices || []]));
+  const answerMap = new Map((answers || []).map(a => [String(a.questionId), a]));
   attempt.answers = attempt.answers.map(a => {
     const obj = a.toObject();
-    if (answerMap.has(String(a.questionId))) obj.selectedIndices = answerMap.get(String(a.questionId));
+    const incoming = answerMap.get(String(a.questionId));
+    if (!incoming) return obj;
+    if (a.questionType === 'essay') {
+      if (incoming.textAnswer !== undefined) obj.textAnswer = incoming.textAnswer || '';
+      if (incoming.imageAnswer !== undefined) obj.imageAnswer = incoming.imageAnswer || '';
+      if (incoming.audioAnswer !== undefined) obj.audioAnswer = incoming.audioAnswer || '';
+    } else if (incoming.selectedIndices !== undefined) {
+      obj.selectedIndices = incoming.selectedIndices;
+    }
     return obj;
   });
   await attempt.save();
   success(res, null, 'Đã lưu tạm');
+};
+
+// Ghi nhận 1 lần học sinh rời khỏi màn hình làm bài (chuyển tab, thu nhỏ trình
+// duyệt...) — client tự phát hiện qua Page Visibility API, gọi 1 lần mỗi khi
+// quay lại màn hình sau khi đã rời đi. Chỉ tăng số đếm, không chặn/khoá bài.
+exports.reportTabSwitch = async (req, res, next) => {
+  const studentId = req.studentAccount.studentId._id;
+  const attempt = await TestAttempt.findOne({ _id: req.params.attemptId, studentId, submittedAt: null });
+  if (!attempt) return next(new AppError('Không tìm thấy bài làm', 404));
+  await TestAttempt.updateOne({ _id: attempt._id }, { $inc: { tabSwitchCount: 1 } });
+  success(res, null, 'Đã ghi nhận');
 };
 
 // Xem lại bài làm đã nộp — kèm đáp án đúng + giải thích.
@@ -262,12 +308,20 @@ exports.getAttemptReview = async (req, res, next) => {
     const q = qMap.get(String(qid));
     const ans = attempt.answers.find(a => String(a.questionId) === String(qid));
     if (!q || !ans) return null;
+    if (ans.questionType === 'essay') {
+      return {
+        questionId: q._id, questionType: 'essay', question: q.question, image: q.image, audioUrl: q.audioUrl,
+        textAnswer: ans.textAnswer, imageAnswer: ans.imageAnswer, audioAnswer: ans.audioAnswer,
+        manualScore: ans.manualScore, points: typeof ans.points === 'number' ? ans.points : (testPointsMap.get(String(qid)) || 0),
+        explanation: q.explanation,
+      };
+    }
     const options = ans.optionOrder.map(i => q.options[i]);
     // Dùng lại đúng snapshot đã dùng để CHẤM điểm (resolveGrading) — tránh hiển
     // thị "đáp án đúng" khác với đáp án đã thực sự dùng để tính ra attempt.score.
     const { correctIndices, points } = resolveGrading(ans, q, testPointsMap.get(String(qid)));
     return {
-      questionId: q._id, question: q.question, image: q.image, audioUrl: q.audioUrl,
+      questionId: q._id, questionType: 'multiple_choice', question: q.question, image: q.image, audioUrl: q.audioUrl,
       options, selectedIndices: ans.selectedIndices, correctIndices,
       isCorrect: sameIndexSet(ans.selectedIndices, correctIndices), explanation: q.explanation, points,
     };
@@ -276,6 +330,7 @@ exports.getAttemptReview = async (req, res, next) => {
   success(res, {
     test: attempt.testId, score: attempt.score, totalPoints: attempt.totalPoints,
     startedAt: attempt.startedAt, submittedAt: attempt.submittedAt, autoSubmitted: attempt.autoSubmitted,
+    pendingManualGrading: attempt.pendingManualGrading,
     questions: detail,
   });
 };

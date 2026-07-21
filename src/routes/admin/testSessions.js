@@ -8,5 +8,6 @@ router.delete('/:id',               ctrl.deleteSession);
 router.get('/:id/results',          ctrl.getSessionResults);
 router.put('/:id/disqualify',       ctrl.setDisqualified);
 router.get('/attempts/:attemptId',  ctrl.getAttemptDetail);
+router.put('/attempts/:attemptId/grade', ctrl.gradeAttempt);
 
 module.exports = router;

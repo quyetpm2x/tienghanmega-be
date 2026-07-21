@@ -11,6 +11,10 @@ const testAttemptSchema = new mongoose.Schema({
   questionOrder: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TestQuestion' }],
   answers: [{
     questionId:   { type: mongoose.Schema.Types.ObjectId, ref: 'TestQuestion', required: true },
+    // "Chụp" lại loại câu hỏi lúc bắt đầu làm — quyết định answer này chấm tự
+    // động (multiple_choice) hay cần chấm tay (essay). Không có default nghĩa
+    // là attempt cũ (trước khi có tính năng tự luận) mặc định coi là trắc nghiệm.
+    questionType: { type: String, enum: ['multiple_choice', 'essay'], default: 'multiple_choice' },
     optionOrder:  [{ type: Number }],   // thứ tự index gốc của các đáp án sau khi xáo, VD [2,0,3,1]
     selectedIndices: { type: [Number], default: [] },   // các vị trí (theo optionOrder, tức đã xáo) học sinh chọn — có thể nhiều hơn 1
     // "Chụp" đáp án đúng (answerIndices, theo index gốc chưa xáo) + điểm của
@@ -21,9 +25,19 @@ const testAttemptSchema = new mongoose.Schema({
     // fallback về tra cứu trực tiếp như cách chấm cũ (xem utils/testScoring.resolveGrading).
     answerIndices: [{ type: Number }],
     points: { type: Number },
+    // Câu tự luận: học sinh gõ chữ, có thể kèm 1 ảnh + 1 file âm thanh.
+    textAnswer:  { type: String, default: '' },
+    imageAnswer: { type: String, default: '' },
+    audioAnswer: { type: String, default: '' },
+    // Điểm giáo viên/admin chấm tay cho câu tự luận — null nghĩa là CHƯA chấm
+    // (khác 0 là "đã chấm, được 0 điểm"). Không áp dụng cho câu trắc nghiệm.
+    manualScore: { type: Number, default: null },
   }],
   score: { type: Number, default: 0 },
   totalPoints: { type: Number, default: 0 },
+  // true nếu attempt còn ít nhất 1 câu tự luận CHƯA được chấm tay — giúp giáo
+  // viên/admin lọc nhanh những bài cần chấm khi xem bảng điểm.
+  pendingManualGrading: { type: Boolean, default: false },
   startedAt: { type: Date, default: Date.now },
   submittedAt: { type: Date, default: null },
   autoSubmitted: { type: Boolean, default: false },
@@ -34,6 +48,10 @@ const testAttemptSchema = new mongoose.Schema({
   // Đánh dấu bài làm này đã bị giáo viên/admin đình chỉ giữa chừng — nếu đang
   // làm dở thì submittedAt cũng được set ngay lúc đình chỉ để khoá lại.
   disqualified: { type: Boolean, default: false },
+  // Số lần học sinh rời khỏi màn hình làm bài (chuyển tab, thu nhỏ trình duyệt...)
+  // — client tự phát hiện qua Page Visibility API và báo về, giúp giáo viên/admin
+  // nghi vấn gian lận khi xem bảng điểm.
+  tabSwitchCount: { type: Number, default: 0 },
 }, { timestamps: true });
 
 // 1 học sinh có thể có NHIỀU document cho cùng 1 phiên thi (mỗi lần làm lại là

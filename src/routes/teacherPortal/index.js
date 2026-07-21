@@ -29,5 +29,6 @@ router.put('/test-sessions/:id/reopen',   testCtrl.reopenSession);
 router.get('/test-sessions/:id/results',  testCtrl.getSessionResults);
 router.put('/test-sessions/:id/disqualify', testCtrl.setDisqualified);
 router.get('/test-attempts/:attemptId',   testCtrl.getAttemptDetail);
+router.put('/test-attempts/:attemptId/grade', testCtrl.gradeAttempt);
 
 module.exports = router;

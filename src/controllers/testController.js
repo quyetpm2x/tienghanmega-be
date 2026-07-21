@@ -17,14 +17,15 @@ exports.getOne = async (req, res, next) => {
 
 // Pool đề đang gán cho 1 lớp — dùng cho cả màn admin xem lại lẫn giáo viên mở phiên thi.
 exports.getByClass = async (req, res) => {
-  const tests = await Test.find({ assignedClassIds: req.params.classId }).select('title level duration questions');
+  const tests = await Test.find({ assignedClassIds: req.params.classId }).select('title level proficiency duration questions');
   success(res, tests);
 };
 
 function validateBody(body, next) {
-  const { title, level, duration, questions } = body;
+  const { title, level, proficiency, duration, questions } = body;
   if (!title?.trim()) { next(new AppError('Vui lòng nhập tên đề', 400)); return false; }
-  if (!level?.trim()) { next(new AppError('Vui lòng chọn cấp độ', 400)); return false; }
+  if (!level?.trim()) { next(new AppError('Vui lòng chọn độ khó', 400)); return false; }
+  if (!proficiency?.trim()) { next(new AppError('Vui lòng chọn trình độ', 400)); return false; }
   if (!duration || duration <= 0) { next(new AppError('Thời lượng làm bài không hợp lệ', 400)); return false; }
   if (!Array.isArray(questions) || questions.length === 0) { next(new AppError('Đề cần ít nhất 1 câu hỏi', 400)); return false; }
   return true;
@@ -32,16 +33,16 @@ function validateBody(body, next) {
 
 exports.create = async (req, res, next) => {
   if (!validateBody(req.body, next)) return;
-  const { title, level, duration, questions } = req.body;
-  const test = await Test.create({ title: title.trim(), level: level.trim(), duration, questions });
+  const { title, level, proficiency, duration, questions } = req.body;
+  const test = await Test.create({ title: title.trim(), level: level.trim(), proficiency: proficiency.trim(), duration, questions });
   success(res, test, 'Tạo đề kiểm tra thành công', 201);
 };
 
 exports.update = async (req, res, next) => {
   if (!validateBody(req.body, next)) return;
-  const { title, level, duration, questions } = req.body;
+  const { title, level, proficiency, duration, questions } = req.body;
   const test = await Test.findByIdAndUpdate(req.params.id, {
-    title: title.trim(), level: level.trim(), duration, questions,
+    title: title.trim(), level: level.trim(), proficiency: proficiency.trim(), duration, questions,
   }, { new: true, runValidators: true });
   if (!test) return next(new AppError('Không tìm thấy đề kiểm tra', 404));
   success(res, test, 'Cập nhật thành công');

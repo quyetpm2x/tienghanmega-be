@@ -50,18 +50,16 @@ exports.getMyStudents = async (req, res) => {
   success(res, students);
 };
 
-// Giáo viên sửa thông tin cơ bản + ghi chú của học sinh lớp mình — KHÔNG được
-// sửa học phí/số tiền/chuyển lớp (vẫn là nghiệp vụ riêng của admin).
+// Giáo viên chỉ được sửa ghi chú của học sinh lớp mình — KHÔNG được sửa họ
+// tên/SĐT/email (đổi hồ sơ) hay học phí/số tiền/chuyển lớp (vẫn là nghiệp vụ
+// riêng của admin). Body có gửi kèm name/phone/email cũng bị bỏ qua, không lưu.
 exports.updateMyStudent = async (req, res, next) => {
   const teacherId = req.teacherAccount.teacherId._id;
   const student = await assertOwnStudent(teacherId, req.params.id);
   if (!student) return next(new AppError('Không tìm thấy học sinh', 404));
 
-  const { name, phone, email, note } = req.body;
+  const { note } = req.body;
   const body = {};
-  if (name !== undefined) body.name = name;
-  if (phone !== undefined) body.phone = phone;
-  if (email !== undefined) body.email = email;
   if (note !== undefined) body.note = note;
 
   const updated = await Student.findByIdAndUpdate(req.params.id, body, { new: true, runValidators: true })
