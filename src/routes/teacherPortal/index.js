@@ -19,6 +19,9 @@ router.get('/attendance', ctrl.getMyAttendance);
 router.post('/attendance', ctrl.createAttendance);
 router.put('/attendance/:id', ctrl.updateAttendance);
 
+// Mã giới thiệu của tôi + hoa hồng đã nhận từ những người mình giới thiệu.
+router.get('/referrals', ctrl.getMyReferrals);
+
 // Bài kiểm tra: admin tạo phiên (chọn lớp + chọn đề), giáo viên chỉ đặt giờ/
 // mở/đóng phiên, xem điểm + bài làm — không được tạo phiên hay đổi đề.
 router.get('/test-sessions',              testCtrl.getSessions);

@@ -8,6 +8,7 @@ router.post('/', ctrl.submit);
 // Admin only
 router.get('/', protect, ctrl.getAll);
 router.put('/:id/status', protect, ctrl.updateStatus);
+router.put('/:id/convert', protect, ctrl.markConverted);
 router.delete('/:id', protect, ctrl.remove);
 
 module.exports = router;

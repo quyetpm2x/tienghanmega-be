@@ -9,5 +9,6 @@ router.delete('/:id', ctrl.remove);
 router.post('/:id/transfer', ctrl.transfer);
 router.get('/:id/payments', ctrl.getPayments);
 router.post('/:id/payments', ctrl.addPayment);
+router.post('/:id/referral-code', ctrl.generateReferralCode);
 
 module.exports = router;

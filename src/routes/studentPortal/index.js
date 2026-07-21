@@ -9,6 +9,13 @@ router.use(protectStudent);
 
 router.get('/me', ctrl.getMe);
 
+// Phản hồi về giáo viên/lớp đang học — chỉ admin xem được (xem StudentFeedback model).
+router.get('/feedback', ctrl.getMyFeedback);
+router.put('/feedback', ctrl.submitFeedback);
+
+// Mã giới thiệu của tôi + hoa hồng đã nhận từ những người mình giới thiệu.
+router.get('/referrals', ctrl.getMyReferrals);
+
 // Upload ảnh/audio đính kèm câu trả lời tự luận.
 router.use('/upload', uploadRouter);
 

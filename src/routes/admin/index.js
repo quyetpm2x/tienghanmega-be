@@ -34,5 +34,7 @@ router.use('/success-videos', require('./successVideos'));
 router.use('/community-links', require('./communityLinks'));
 router.use('/feedback-videos', require('./feedbackVideos'));
 router.use('/feedback-images', require('./feedbackImages'));
+router.use('/student-feedbacks', require('./studentFeedback'));
+router.use('/affiliate', require('./affiliate'));
 
 module.exports = router;

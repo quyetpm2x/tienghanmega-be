@@ -31,6 +31,21 @@ exports.updateStatus = async (req, res, next) => {
   success(res, reg, 'Cập nhật trạng thái thành công');
 };
 
+// Đánh dấu 1 đơn đăng ký đã được chuyển thành Student thật (Student đã được
+// tạo riêng qua apiStudents.create — hàm này chỉ ghi lại liên kết + tự chuyển
+// trạng thái sang "enrolled" để tránh admin bấm chuyển trùng đơn này lần nữa.
+exports.markConverted = async (req, res, next) => {
+  const { studentId } = req.body;
+  if (!studentId) return next(new AppError('Thiếu studentId', 400));
+  const reg = await Registration.findByIdAndUpdate(
+    req.params.id,
+    { convertedStudentId: studentId, status: 'enrolled' },
+    { new: true }
+  );
+  if (!reg) return next(new AppError('Không tìm thấy đơn', 404));
+  success(res, reg, 'Đã chuyển thành học sinh');
+};
+
 exports.remove = async (req, res, next) => {
   const reg = await Registration.findByIdAndDelete(req.params.id);
   if (!reg) return next(new AppError('Không tìm thấy đơn', 404));

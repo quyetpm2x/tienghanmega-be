@@ -19,6 +19,10 @@ const teacherSchema = new mongoose.Schema({
   monthSessions: { type: Number, default: 0 },
   adminNote: String,
   order: { type: Number, default: null },
+  // Mã giới thiệu CỦA giảng viên này — học sinh nhập mã này lúc đăng ký sẽ
+  // ghi nhận giảng viên là người giới thiệu, nhận 10% hoa hồng học phí (xem
+  // utils/referral.js + models/ReferralCommission.js). Tự sinh khi tạo giảng viên.
+  referralCode: { type: String, unique: true, sparse: true, uppercase: true, trim: true },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Teacher', teacherSchema);

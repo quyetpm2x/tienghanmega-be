@@ -2,6 +2,8 @@ const Class = require('../models/Class');
 const Student = require('../models/Student');
 const StudentAttendance = require('../models/StudentAttendance');
 const Account = require('../models/Account');
+const Teacher = require('../models/Teacher');
+const { generateUniqueReferralCode, buildMyReferrals } = require('../utils/referral');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
@@ -171,6 +173,23 @@ exports.getClassStudents = async (req, res, next) => {
     };
   });
   success(res, result);
+};
+
+// Mã giới thiệu của chính giáo viên này + toàn bộ danh sách học sinh đã dùng mã
+// này khi đăng ký — kể cả những người CHƯA đóng đủ học phí (chưa phát sinh hoa
+// hồng), để giáo viên biết mã của mình đã được dùng chứ không chỉ thấy lúc có tiền.
+exports.getMyReferrals = async (req, res, next) => {
+  const teacherId = req.teacherAccount.teacherId._id;
+  const teacher = await Teacher.findById(teacherId).select('referralCode');
+  if (!teacher) return next(new AppError('Không tìm thấy giảng viên', 404));
+  // Giảng viên tạo trước khi có tính năng này có thể chưa có mã — tự sinh
+  // ngay khi vào xem trang, không bắt buộc phải chờ admin backfill.
+  if (!teacher.referralCode) {
+    teacher.referralCode = await generateUniqueReferralCode();
+    await teacher.save();
+  }
+  const referrals = await buildMyReferrals('Teacher', teacherId);
+  success(res, { referralCode: teacher.referralCode, referrals });
 };
 
 exports.getMyAttendance = async (req, res, next) => {

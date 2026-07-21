@@ -1,4 +1,5 @@
 const Teacher = require('../models/Teacher');
+const { generateUniqueReferralCode } = require('../utils/referral');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
@@ -32,14 +33,31 @@ exports.getOne = async (req, res, next) => {
 };
 
 exports.create = async (req, res) => {
-  const teacher = await Teacher.create(req.body);
+  const teacher = new Teacher(req.body);
+  teacher.referralCode = await generateUniqueReferralCode();
+  await teacher.save();
   success(res, teacher, 'Tạo giảng viên thành công', 201);
 };
 
 exports.update = async (req, res, next) => {
-  const teacher = await Teacher.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+  // referralCode chỉ được hệ thống tự set (qua create/generateReferralCode),
+  // không cho client ghi đè trực tiếp qua form sửa thông tin thông thường.
+  const { referralCode, ...rest } = req.body;
+  const teacher = await Teacher.findByIdAndUpdate(req.params.id, rest, { new: true, runValidators: true });
   if (!teacher) return next(new AppError('Không tìm thấy giảng viên', 404));
   success(res, teacher, 'Cập nhật thành công');
+};
+
+// POST /admin/teachers/:id/referral-code (mount /admin/teachers -> routes/teachers.js)
+// — sinh mã giới thiệu cho giảng viên CHƯA có mã (idempotent).
+exports.generateReferralCode = async (req, res, next) => {
+  const teacher = await Teacher.findById(req.params.id);
+  if (!teacher) return next(new AppError('Không tìm thấy giảng viên', 404));
+  if (!teacher.referralCode) {
+    teacher.referralCode = await generateUniqueReferralCode();
+    await teacher.save();
+  }
+  success(res, teacher, 'Đã tạo mã giới thiệu');
 };
 
 exports.remove = async (req, res, next) => {
