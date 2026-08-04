@@ -18,7 +18,9 @@ app.use(helmet());
 const ALLOWED_ORIGINS = [
   /^https?:\/\/localhost(:\d+)?$/,
   /^https?:\/\/.*\.ngrok-free\.app$/,
+  /^https?:\/\/.*\.ngrok-free\.dev$/,
   /^https?:\/\/.*\.ngrok\.io$/,
+  /^https?:\/\/.*\.ngrok\.app$/,
   /^https?:\/\/.*\.vercel\.app$/,
 ];
 // Allow FRONTEND_URL and its www subdomain
@@ -44,7 +46,10 @@ app.use(cors({
 }));
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
-app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
+// File cũ trong đây là kho lưu trữ tĩnh — không còn route nào ghi/ghi đè vào thư
+// mục này nữa (upload mới đều đẩy lên Vercel Blob qua uploadToBlob, xem
+// src/utils/uploadHandlers.js), nên cache dài hạn + immutable là an toàn.
+app.use('/uploads', express.static(path.join(__dirname, '../public/uploads'), { maxAge: '1y', immutable: true, etag: true }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 app.use('/', (req, res, next) => { res.set('Cache-Control', 'no-store'); next() }, routes);
