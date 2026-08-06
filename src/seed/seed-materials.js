@@ -13,6 +13,11 @@ const data = [
   { order:7, src:'/assets/tai-lieu/hoc-lieu-8.svg', title:'Flash Card Từ Vựng TOPIK',     cat:'TOPIK',     desc:'Bộ flash card 500 từ vựng TOPIK I & II, phân loại theo chủ đề',                          tag:'TOPIK I',  color:'#E67E22' },
 ];
 
+// title/cat/desc giờ là field đa ngôn ngữ { vi, ko } — data ở trên vẫn viết
+// dạng string đơn cho gọn, chuyển sang { vi, ko:'' } ở đây.
+const toI18n = (v) => ({ vi: v, ko: '' });
+const dataI18n = data.map(m => ({ ...m, title: toI18n(m.title), cat: toI18n(m.cat), desc: toI18n(m.desc) }));
+
 async function run() {
   await mongoose.connect(process.env.MONGODB_URI);
   console.log('Connected to MongoDB');
@@ -25,9 +30,9 @@ async function run() {
     console.log('Đã xoá toàn bộ tài liệu cũ.');
   }
 
-  const result = await Material.insertMany(data);
+  const result = await Material.insertMany(dataI18n);
   console.log(`✓ Đã thêm ${result.length} tài liệu vào DB:`);
-  result.forEach(m => console.log(`  [${m.order}] ${m.title} (${m.tag})`));
+  result.forEach(m => console.log(`  [${m.order}] ${m.title.vi} (${m.tag})`));
   await mongoose.disconnect();
   console.log('Done.');
 }

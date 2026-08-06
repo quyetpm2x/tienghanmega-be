@@ -26,7 +26,7 @@ async function run() {
     const c = courses[i];
     const newOrder = i + 1;
     if (c.order !== newOrder) {
-      console.log(`  ${String(newOrder).padStart(2, ' ')}. ${c.title} (order ${c.order ?? 'null'} -> ${newOrder})`);
+      console.log(`  ${String(newOrder).padStart(2, ' ')}. ${c.title.vi} (order ${c.order ?? 'null'} -> ${newOrder})`);
       c.order = newOrder;
       await c.save();
       changed++;

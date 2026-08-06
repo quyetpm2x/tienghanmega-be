@@ -16,23 +16,32 @@ exports.getAll = async (req, res) => {
   success(res, images);
 };
 
+// `image` có thể tới dạng string thuần (client cũ) hoặc { vi, ko } — chuẩn hoá về { vi, ko }.
+// ko tuỳ chọn (fallback về vi khi hiển thị nếu chưa tải lên).
+function normalizeImage(image) {
+  if (typeof image === 'string') return { vi: image.trim(), ko: '' };
+  return { vi: (image?.vi || '').trim(), ko: (image?.ko || '').trim() };
+}
+
 exports.create = async (req, res, next) => {
-  const { image, name, course } = req.body;
-  if (!image?.trim()) return next(new AppError('Vui lòng chọn ảnh phản hồi', 400));
+  const { name, course } = req.body;
+  const image = normalizeImage(req.body.image);
+  if (!image.vi) return next(new AppError('Vui lòng chọn ảnh phản hồi', 400));
   if (!name?.trim() || !course?.trim()) return next(new AppError('Vui lòng nhập đủ tên học viên và khoá học', 400));
   const count = await FeedbackImage.countDocuments();
   if (count >= MAX_IMAGES) return next(new AppError(`Đã đạt tối đa ${MAX_IMAGES} ảnh phản hồi`, 400));
-  const img = await FeedbackImage.create({ image: image.trim(), name: name.trim(), course: course.trim(), order: count });
+  const img = await FeedbackImage.create({ image, name: name.trim(), course: course.trim(), order: count });
   success(res, img, 'Thêm ảnh thành công', 201);
 };
 
 exports.update = async (req, res, next) => {
-  const { image, name, course } = req.body;
-  if (!image?.trim()) return next(new AppError('Vui lòng chọn ảnh phản hồi', 400));
+  const { name, course } = req.body;
+  const image = normalizeImage(req.body.image);
+  if (!image.vi) return next(new AppError('Vui lòng chọn ảnh phản hồi', 400));
   if (!name?.trim() || !course?.trim()) return next(new AppError('Vui lòng nhập đủ tên học viên và khoá học', 400));
   const img = await FeedbackImage.findByIdAndUpdate(
     req.params.id,
-    { image: image.trim(), name: name.trim(), course: course.trim() },
+    { image, name: name.trim(), course: course.trim() },
     { new: true, runValidators: true }
   );
   if (!img) return next(new AppError('Không tìm thấy ảnh', 404));

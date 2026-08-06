@@ -1,8 +1,9 @@
 const mongoose = require('mongoose');
+const { i18nField } = require('../utils/i18nField');
 
 const courseCategorySchema = new mongoose.Schema({
   key:   { type: String, required: true, unique: true },
-  label: { type: String, required: true },
+  label: i18nField({ required: true }),
   color: { type: String, default: '#6366f1' },
   bg:    { type: String, default: '#ede9fe' },
   order: { type: Number, default: 0 },

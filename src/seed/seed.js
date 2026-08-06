@@ -71,6 +71,12 @@ const registrations = [
   { name:'Vũ Thị Minh',      phone:'0945555666', course:'Giao Tiếp',         level:'Giao tiếp',time:'T2,T4,T6 21:30', source:'Facebook', status:'enrolled' },
 ];
 
+// Course.title/desc và Teacher.cert/spec giờ là field đa ngôn ngữ { vi, ko } —
+// dữ liệu mẫu ở trên vẫn viết dạng string đơn cho gọn, chuyển sang { vi, ko:'' } ở đây.
+const toI18n = (v) => ({ vi: v, ko: '' });
+const coursesI18n = courses.map(c => ({ ...c, title: toI18n(c.title), desc: toI18n(c.desc) }));
+const teachersI18n = teachers.map(t => ({ ...t, cert: toI18n(t.cert), spec: toI18n(t.spec) }));
+
 // ── Seed ─────────────────────────────────────────────────────────────────────
 
 async function seed() {
@@ -92,8 +98,8 @@ async function seed() {
 
   // Insert
   await Admin.create(admins);
-  await Course.insertMany(courses);
-  await Teacher.insertMany(teachers);
+  await Course.insertMany(coursesI18n);
+  await Teacher.insertMany(teachersI18n);
   const insertedClasses = await Class.insertMany(classes);
   await Revenue.insertMany(revenues);
   await Registration.insertMany(registrations);

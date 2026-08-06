@@ -24,6 +24,11 @@ const audioUpload = multer({
   },
 });
 
+// Store Blob của production dùng token riêng (BLOB_READ_WRITE_TOKEN_PRODUCT) khác
+// với token mặc định (BLOB_READ_WRITE_TOKEN) mà @vercel/blob tự đọc — phải truyền
+// tường minh, nếu không put() sẽ trỏ nhầm store ("This store does not exist").
+const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN_PRODUCT || process.env.BLOB_READ_WRITE_TOKEN;
+
 // Đẩy file (đã nằm trong RAM qua multer) lên Vercel Blob, trả về path tương
 // đối /cdn/... (không phải URL vercel-storage.com trực tiếp) — FE có rewrite
 // /cdn/:path* proxy sang Blob storage (xem next.config.js).
@@ -33,6 +38,7 @@ async function uploadToBlob(file, folder, defaultExt = '') {
   await put(`${folder}/${name}`, file.buffer, {
     access: 'public',
     contentType: file.mimetype,
+    token: BLOB_TOKEN,
   });
   return `/cdn/${folder}/${name}`;
 }

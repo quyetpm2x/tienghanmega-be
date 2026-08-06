@@ -16,9 +16,17 @@ exports.getAll = async (req, res) => {
   success(res, links);
 };
 
+// `imageUrl` có thể tới dạng string thuần (client cũ) hoặc { vi, ko } — chuẩn hoá về { vi, ko }.
+// ko tuỳ chọn (fallback về vi khi hiển thị nếu chưa tải lên).
+function normalizeImageUrl(imageUrl) {
+  if (typeof imageUrl === 'string') return { vi: imageUrl.trim(), ko: '' };
+  return { vi: (imageUrl?.vi || '').trim(), ko: (imageUrl?.ko || '').trim() };
+}
+
 exports.create = async (req, res, next) => {
-  const { imageUrl, linkUrl } = req.body;
-  if (!imageUrl || !linkUrl) return next(new AppError('Vui lòng nhập đủ ảnh và link', 400));
+  const { linkUrl } = req.body;
+  const imageUrl = normalizeImageUrl(req.body.imageUrl);
+  if (!imageUrl.vi || !linkUrl) return next(new AppError('Vui lòng nhập đủ ảnh và link', 400));
   const count = await CommunityLink.countDocuments();
   if (count >= MAX_LINKS) return next(new AppError(`Chỉ được thêm tối đa ${MAX_LINKS} ảnh`, 400));
   const link = await CommunityLink.create({ imageUrl, linkUrl, order: count });
@@ -26,8 +34,9 @@ exports.create = async (req, res, next) => {
 };
 
 exports.update = async (req, res, next) => {
-  const { imageUrl, linkUrl } = req.body;
-  if (!imageUrl || !linkUrl) return next(new AppError('Vui lòng nhập đủ ảnh và link', 400));
+  const { linkUrl } = req.body;
+  const imageUrl = normalizeImageUrl(req.body.imageUrl);
+  if (!imageUrl.vi || !linkUrl) return next(new AppError('Vui lòng nhập đủ ảnh và link', 400));
   const link = await CommunityLink.findByIdAndUpdate(
     req.params.id,
     { imageUrl, linkUrl },

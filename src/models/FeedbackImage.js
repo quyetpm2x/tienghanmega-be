@@ -1,7 +1,8 @@
 const mongoose = require('mongoose');
+const { i18nField } = require('../utils/i18nField');
 
 const feedbackImageSchema = new mongoose.Schema({
-  image:  { type: String, required: true, trim: true },
+  image:  i18nField({ required: true }),
   name:   { type: String, required: true, trim: true },
   course: { type: String, required: true, trim: true },
   order:  { type: Number, default: 0 },

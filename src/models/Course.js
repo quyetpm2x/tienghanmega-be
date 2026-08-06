@@ -1,9 +1,10 @@
 const mongoose = require('mongoose');
+const { i18nField } = require('../utils/i18nField');
 
 const courseSchema = new mongoose.Schema({
   slug: { type: Number, required: true, unique: true }, // original id from frontend
-  title: { type: String, required: true },
-  desc: String,
+  title: i18nField({ required: true }),
+  desc: i18nField(),
   level: String,
   duration: String,
   students: { type: Number, default: 0 },
@@ -21,8 +22,11 @@ const courseSchema = new mongoose.Schema({
     time: String,
     days: String,
   },
-  content: [String],
-  freeBonus: String,
+  content: {
+    vi: { type: [String], default: [] },
+    ko: { type: [String], default: [] },
+  },
+  freeBonus: i18nField(),
   classInfo: {
     sessions: String,
     duration: String,
@@ -30,11 +34,11 @@ const courseSchema = new mongoose.Schema({
     teacher: String,
   },
   commitment: {
-    target: String,
-    result: String,
+    target: i18nField(),
+    result: i18nField(),
     refund: { type: Boolean, default: false },
   },
-  image: String,
+  image: i18nField(),
   isActive: { type: Boolean, default: true },
   order: { type: Number, default: null },
 }, { timestamps: true });

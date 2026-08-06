@@ -1,13 +1,20 @@
 const mongoose = require('mongoose');
+const { i18nField } = require('../utils/i18nField');
 
 const teacherSchema = new mongoose.Schema({
-  name: { type: String, required: true },
+  name: { type: String, required: true }, // tên riêng — không dịch
   nat: { type: String, enum: ['vn', 'kr'], default: 'vn' },
-  cert: String,
-  credentials: [String],
-  spec: String,
+  cert: i18nField(),
+  // Thành tích/mô tả — danh sách nhiều dòng, đa ngôn ngữ (ko tuỳ chọn, không
+  // bắt buộc phải dịch từng dòng). Khác i18nField() (chỉ cho string đơn) vì
+  // đây là mảng nhiều dòng.
+  credentials: {
+    vi: { type: [String], default: [] },
+    ko: { type: [String], default: [] },
+  },
+  spec: i18nField(),
   color: String,
-  src: String,
+  src: i18nField(),
   isActive: { type: Boolean, default: true },
   // admin extended fields
   classes: [String],

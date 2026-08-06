@@ -8,6 +8,7 @@
     "dev": "NODE_ENV=development nodemon src/server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "seed": "node src/seed/seed.js",
+    "migrate:i18n": "node scripts/migrate-i18n-fields.js",
     "backup": "bash scripts/backup.sh"
   },
   "repository": {
