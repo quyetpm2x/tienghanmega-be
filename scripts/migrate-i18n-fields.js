@@ -21,7 +21,7 @@ const connectDB = require('../src/config/database');
 const TARGETS = [
   { collection: 'courses', fields: ['title', 'desc', 'image', 'freeBonus'] },
   { collection: 'teachers', fields: ['cert', 'spec', 'src'] },
-  { collection: 'materials', fields: ['title', 'cat', 'desc'] },
+  { collection: 'materials', fields: ['title', 'cat', 'desc', 'src'] },
   { collection: 'faqs', fields: ['question', 'answer'] },
   { collection: 'coursecategories', fields: ['label'] },
   { collection: 'classes', fields: ['promo'] },

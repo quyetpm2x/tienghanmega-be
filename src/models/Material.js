@@ -3,7 +3,7 @@ const { i18nField } = require('../utils/i18nField');
 
 const materialSchema = new mongoose.Schema({
   order:     { type: Number, default: 0 },
-  src:       { type: String, default: '' },      // image URL / path
+  src:       i18nField(),                         // image URL / path
   title:     i18nField({ required: true }),
   cat:       i18nField(),                         // Sơ cấp, Trung cấp, TOPIK …
   desc:      i18nField(),

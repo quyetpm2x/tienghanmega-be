@@ -82,6 +82,12 @@ exports.update = async (req, res, next) => {
   if ('teacher' in body) body.teacherId = await resolveTeacherId(body.teacher);
   const cls = await Class.findByIdAndUpdate(req.params.id, body, { new: true, runValidators: true });
   if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
+  // Student.level là bản sao chụp course của lớp tại thời điểm thêm/chuyển lớp — nếu
+  // admin đổi khoá học gắn với lớp sau đó, học sinh đang học lớp này sẽ bị lệch dữ liệu
+  // (hiển thị sai, tra giá học phí sai...) nếu không đồng bộ lại ngay tại đây.
+  if ('course' in body) {
+    await Student.updateMany({ classId: cls._id }, { $set: { level: cls.course } });
+  }
   success(res, cls, 'Cập nhật thành công');
 };
 
