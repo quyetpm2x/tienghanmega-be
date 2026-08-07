@@ -23,6 +23,8 @@ router.use('/feedback-videos', require('./feedbackVideos'));
 router.use('/feedback-images', require('./feedbackImages'));
 router.use('/vocab', require('./vocab'));
 router.use('/topik-questions', require('./topik-questions'));
+router.use('/topik-tests', require('./topik-tests'));
+router.use('/topik-submissions', require('./topik-submissions'));
 router.use('/teacher-portal', require('./teacherPortal'));
 router.use('/student-portal', require('./studentPortal'));
 router.use('/admin', require('./admin'));
