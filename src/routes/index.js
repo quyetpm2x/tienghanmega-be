@@ -25,6 +25,8 @@ router.use('/vocab', require('./vocab'));
 router.use('/topik-questions', require('./topik-questions'));
 router.use('/topik-tests', require('./topik-tests'));
 router.use('/topik-submissions', require('./topik-submissions'));
+router.use('/placement-tests', require('./placement-tests'));
+router.use('/placement-sessions', require('./placement-sessions'));
 router.use('/teacher-portal', require('./teacherPortal'));
 router.use('/student-portal', require('./studentPortal'));
 router.use('/admin', require('./admin'));
