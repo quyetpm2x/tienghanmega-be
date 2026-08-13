@@ -9,7 +9,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "seed": "node src/seed/seed.js",
     "migrate:i18n": "node scripts/migrate-i18n-fields.js",
-    "backup": "bash scripts/backup.sh"
+    "backup": "bash scripts/backup.sh",
+    "copy-prod-to-dev": "bash scripts/copy-prod-to-dev.sh"
   },
   "repository": {
     "type": "git",

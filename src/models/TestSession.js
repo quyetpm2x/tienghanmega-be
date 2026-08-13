@@ -25,6 +25,13 @@ const testSessionSchema = new mongoose.Schema({
   // Học sinh bị đình chỉ thi cho phiên này — chặn bắt đầu/tiếp tục làm bài,
   // đặt trước khi học sinh có attempt cũng có tác dụng (chặn ngay từ đầu).
   disqualifiedStudentIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Student' }],
+  // Ghi lại khi 1 đề trong activeTestIds/poolTestIds bị ADMIN XOÁ hẳn (không
+  // phải bỏ gán bình thường) — để hiển thị cảnh báo cho admin biết phiên này
+  // từng có đề đã bị xoá, tránh admin ngỡ ngàng khi thấy phiên thiếu đề.
+  removedTestNotices: [{
+    title: String,
+    removedAt: { type: Date, default: Date.now },
+  }],
 }, { timestamps: true });
 
 module.exports = mongoose.model('TestSession', testSessionSchema);

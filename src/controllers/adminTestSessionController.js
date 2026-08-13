@@ -108,13 +108,14 @@ exports.updateSession = async (req, res, next) => {
   success(res, session, 'Cập nhật phiên kiểm tra thành công');
 };
 
-// Xoá phiên (chỉ khi chưa có học sinh nào làm bài) — dùng khi admin tạo nhầm
-// lớp/đề trước khi giáo viên kịp đặt giờ, hoặc muốn dọn phiên cũ.
+// Xoá phiên — admin đã xác nhận xoá (gõ YES ở FE) nên cho xoá luôn kể cả khi
+// đã có học sinh làm bài. Cascade xoá luôn toàn bộ TestAttempt của phiên này
+// (bài làm gắn với 1 phiên không còn tồn tại thì không còn ý nghĩa để xem
+// lại/chấm điểm), tránh để lại bản ghi mồ côi trỏ tới sessionId đã mất.
 exports.deleteSession = async (req, res, next) => {
   const session = await TestSession.findById(req.params.id);
   if (!session) return next(new AppError('Không tìm thấy phiên kiểm tra', 404));
-  const hasAttempts = await TestAttempt.exists({ sessionId: session._id });
-  if (hasAttempts) return next(new AppError('Đã có học sinh làm bài trong phiên này, không thể xoá — hãy đóng phiên thay vì xoá', 400));
+  await TestAttempt.deleteMany({ sessionId: session._id });
   await session.deleteOne();
   success(res, null, 'Đã xoá phiên kiểm tra');
 };

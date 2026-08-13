@@ -1,7 +1,6 @@
 const Test = require('../models/Test');
 const TestQuestion = require('../models/TestQuestion');
 const TestSession = require('../models/TestSession');
-const TestAttempt = require('../models/TestAttempt');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
@@ -131,20 +130,26 @@ exports.update = async (req, res, next) => {
 exports.remove = async (req, res, next) => {
   const test = await Test.findById(req.params.id);
   if (!test) return next(new AppError('Không tìm thấy đề kiểm tra', 404));
-  if (test.assignedClassIds.length > 0) {
-    return next(new AppError('Đề đang được gán cho ít nhất 1 lớp — bỏ gán hết trước khi xoá', 400));
-  }
-  // Chặn xoá nếu đề còn nằm trong bất kỳ phiên kiểm tra nào (kể cả đã đóng)
-  // hoặc có bài làm nào của học sinh tham chiếu tới — nếu không, các trang xem
-  // lại bài làm/bảng điểm sẽ bị lỗi do testId trỏ tới đề không còn tồn tại.
-  const usedInSession = await TestSession.exists({ $or: [{ activeTestIds: test._id }, { poolTestIds: test._id }] });
-  if (usedInSession) {
-    return next(new AppError('Đề đang được dùng trong ít nhất 1 phiên kiểm tra (kể cả đã đóng), không thể xoá', 400));
-  }
-  const usedInAttempt = await TestAttempt.exists({ testId: test._id });
-  if (usedInAttempt) {
-    return next(new AppError('Đề đã có học sinh làm bài, không thể xoá', 400));
-  }
+  // Admin đã xác nhận xoá (gõ YES ở FE) — cho xoá luôn kể cả khi đề đang gán
+  // cho lớp, đang nằm trong phiên kiểm tra, hoặc đã có học sinh làm bài.
+  // assignedClassIds chỉ lưu 1 chiều trên Test nên xoá cả document là tự dọn
+  // sạch, không cần update riêng.
+  //
+  // Cơ chế liên kết xoá đề ↔ phiên kiểm tra: xoá đề CHỈ xoá đề khỏi ngân hàng
+  // — KHÔNG đụng tới TestAttempt (giữ nguyên kết quả/bài làm học sinh đã có).
+  // Với mọi phiên đang tham chiếu đề này: gỡ testId khỏi activeTestIds/
+  // poolTestIds, ghi removedTestNotices để admin thấy cảnh báo ngay trên item
+  // phiên, và ĐÓNG LUÔN phiên đó (status: 'closed') — đề đã mất thì phiên
+  // không thể mở cho học sinh làm tiếp được nữa, nhưng phiên + kết quả cũ vẫn
+  // giữ nguyên để xem lại.
+  await TestSession.updateMany(
+    { $or: [{ activeTestIds: test._id }, { poolTestIds: test._id }] },
+    {
+      $pull: { activeTestIds: test._id, poolTestIds: test._id },
+      $push: { removedTestNotices: { title: test.title } },
+      $set: { status: 'closed', closedAt: new Date().toISOString() },
+    }
+  );
   await test.deleteOne();
   success(res, null, 'Xoá thành công');
 };

@@ -43,12 +43,21 @@ exports.getMySessions = async (req, res) => {
     .populate('activeTestIds', 'title level duration')
     .sort({ createdAt: -1 });
 
-  // Có thể có nhiều attempt/session (mỗi lần làm lại là 1 document) — chỉ lấy
-  // lần MỚI NHẤT để hiển thị trạng thái hiện tại cho học sinh.
+  // Có thể có nhiều attempt/session (mỗi lần làm lại là 1 document). myAttempt
+  // (lần MỚI NHẤT) dùng để hiển thị trạng thái hiện tại (đang làm/có thể bắt
+  // đầu); myAttempts (TẤT CẢ các lần đã nộp) dùng để liệt kê lịch sử điểm khi
+  // học sinh đã làm lại nhiều lần.
   const attempts = await TestAttempt.find({ studentId, sessionId: { $in: sessions.map(s => s._id) } })
     .select('sessionId testId score totalPoints submittedAt autoSubmitted attemptCount startedAt pendingManualGrading')
     .sort({ attemptCount: 1 });
   const attemptMap = new Map(attempts.map(a => [String(a.sessionId), a]));
+  const attemptsBySession = new Map();
+  for (const a of attempts) {
+    if (!a.submittedAt) continue;
+    const key = String(a.sessionId);
+    if (!attemptsBySession.has(key)) attemptsBySession.set(key, []);
+    attemptsBySession.get(key).push(a);
+  }
 
   // Cần thời lượng của đề đang làm dở để FE tự đếm ngược cạnh nút "Tiếp tục
   // làm bài" — chỉ tra cứu cho các attempt CHƯA nộp (đã nộp thì không cần).
@@ -60,6 +69,10 @@ exports.getMySessions = async (req, res) => {
 
   success(res, sessions.map(s => {
     const a = attemptMap.get(String(s._id));
+    const sStatus = effectiveStatus(s);
+    // Còn cho làm lại + phiên chưa đóng → chưa cho xem đáp án đúng (tránh lộ
+    // đáp án cho lần làm lại tiếp theo). Khớp đúng điều kiện chặn ở getAttemptReview.
+    const reviewLocked = s.allowRetake && sStatus !== 'closed';
     return {
       _id: s._id,
       title: s.title,
@@ -67,7 +80,12 @@ exports.getMySessions = async (req, res) => {
       openAt: s.openAt,
       endAt: s.endAt,
       allowRetake: s.allowRetake,
-      effectiveStatus: effectiveStatus(s),
+      effectiveStatus: sStatus,
+      reviewLocked,
+      myAttempts: (attemptsBySession.get(String(s._id)) || []).map(x => ({
+        _id: x._id, score: x.score, totalPoints: x.totalPoints, attemptCount: x.attemptCount,
+        submittedAt: x.submittedAt, autoSubmitted: x.autoSubmitted, pendingManualGrading: x.pendingManualGrading,
+      })),
       myAttempt: a ? {
         _id: a._id,
         sessionId: a.sessionId,
@@ -163,6 +181,10 @@ exports.startAttempt = async (req, res, next) => {
     duration: test.duration,
     startedAt: attempt.startedAt,
     remainingMs,
+    // Số lần đã rời màn hình TÍNH TỪ TRƯỚC (nếu học sinh thoát trang rồi quay
+    // lại làm tiếp) — FE dùng làm giá trị khởi tạo để cộng dồn, không reset
+    // về 0 mỗi lần vào lại trang làm bài.
+    tabSwitchCount: attempt.tabSwitchCount,
     questions: attempt.questionOrder.map(qid => {
       const q = qMap.get(String(qid));
       const a = answerMap.get(String(qid));
@@ -294,6 +316,14 @@ exports.getAttemptReview = async (req, res, next) => {
     return next(new AppError('Không tìm thấy bài làm', 404));
   }
   if (!attempt.submittedAt) return next(new AppError('Bài làm chưa được nộp', 400));
+
+  // Phiên cho phép làm lại + CHƯA đóng → chặn xem đáp án đúng, tránh học sinh
+  // xem đáp án lần này rồi áp dụng luôn cho lần làm lại tiếp theo. Check ở
+  // backend (không chỉ ẩn UI) vì học sinh có thể gọi thẳng URL review.
+  const session = await TestSession.findById(attempt.sessionId).select('allowRetake status openAt endAt closedAt');
+  if (session && session.allowRetake && effectiveStatus(session) !== 'closed') {
+    return next(new AppError('Phiên kiểm tra cho phép làm lại vẫn đang mở — chỉ xem lại được đáp án sau khi phiên kết thúc', 403));
+  }
 
   const questions = await TestQuestion.find({ _id: { $in: attempt.questionOrder } });
   const qMap = new Map(questions.map(q => [String(q._id), q]));
