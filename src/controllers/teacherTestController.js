@@ -196,11 +196,12 @@ exports.getAttemptDetail = async (req, res, next) => {
   const questions = await TestQuestion.find({ _id: { $in: attempt.questionOrder } });
   const questionMap = new Map(questions.map(q => [String(q._id), q]));
 
-  // Chỉ cần tra điểm "sống" từ Test cho các câu CHƯA có snapshot points (attempt cũ).
-  const needsLivePoints = attempt.answers.some(a => typeof a.points !== 'number');
-  const testPointsMap = needsLivePoints
-    ? new Map((await Test.findById(attempt.testId._id).select('questions')).questions.map(q => [String(q.questionId), q.points]))
-    : new Map();
+  // Chỉ cần tra điểm "sống" từ Test cho các câu CHƯA có snapshot points (attempt
+  // cũ) — bỏ qua nếu đề đã bị xoá khỏi ngân hàng (attempt.testId null), dùng
+  // luôn points snapshot sẵn có (hoặc 0) thay vì crash.
+  const needsLivePoints = attempt.testId && attempt.answers.some(a => typeof a.points !== 'number');
+  const liveTest = needsLivePoints ? await Test.findById(attempt.testId._id).select('questions') : null;
+  const testPointsMap = liveTest ? new Map(liveTest.questions.map(q => [String(q.questionId), q.points])) : new Map();
 
   const detail = attempt.questionOrder.map(qid => {
     const q = questionMap.get(String(qid));
