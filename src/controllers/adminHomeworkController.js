@@ -19,6 +19,16 @@ exports.getAssignments = async (req, res) => {
   })));
 };
 
+// Chi tiết 1 bài giao (kèm câu hỏi đầy đủ) — dùng cho modal "Xem chi tiết" ở admin,
+// tách riêng khỏi getAssignments (list) để không phải populate câu hỏi cho MỌI bài
+// giao mỗi lần tải trang, chỉ populate khi admin thật sự mở xem 1 bài cụ thể.
+exports.getAssignment = async (req, res, next) => {
+  const a = await HomeworkAssignment.findById(req.params.id)
+    .populate('teacherId', 'name').populate('classId', 'name').populate('questions.questionId');
+  if (!a) return next(new AppError('Không tìm thấy bài giao', 404));
+  success(res, a);
+};
+
 exports.getAssignmentSubmissions = async (req, res, next) => {
   const assignment = await HomeworkAssignment.findById(req.params.id);
   if (!assignment) return next(new AppError('Không tìm thấy bài giao', 404));

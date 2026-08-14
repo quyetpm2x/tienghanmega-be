@@ -116,6 +116,7 @@ exports.getAssignments = async (req, res) => {
       total: { $sum: 1 },
       submitted: { $sum: { $cond: [{ $ne: ['$submittedAt', null] }, 1, 0] } },
       pendingGrading: { $sum: { $cond: ['$pendingManualGrading', 1, 0] } },
+      pendingDispute: { $sum: { $cond: [{ $eq: ['$disputeStatus', 'pending'] }, 1, 0] } },
     } },
   ]);
   const countMap = new Map(counts.map(c => [String(c._id), c]));
@@ -126,6 +127,9 @@ exports.getAssignments = async (req, res) => {
       hasSubmissions: !!c && c.total > 0,
       submittedCount: c?.submitted || 0,
       pendingGradingCount: c?.pendingGrading || 0,
+      // Bài giao nào đang có thắc mắc CHỜ PHẢN HỒI — hiện note riêng ngay tại dòng
+      // bài giao đó ở tab "Chấm bài", thay vì chỉ báo tổng số chung chung ở đầu trang.
+      pendingDisputeCount: c?.pendingDispute || 0,
     };
   }));
 };
