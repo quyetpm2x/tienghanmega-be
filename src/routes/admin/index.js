@@ -8,6 +8,7 @@ router.use(protect);
 router.get('/dashboard', getStats);
 router.get('/visitors', require('../../controllers/ipController').getVisitors);
 router.use('/students', require('./students'));
+router.use('/homework', require('./homework'));
 router.use('/classes', require('./classes'));
 router.use('/courses', require('./courses'));
 router.use('/course-categories', require('./courseCategories'));

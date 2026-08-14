@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { protectStudent } = require('../../middlewares/auth');
 const ctrl = require('../../controllers/studentPortalController');
 const testCtrl = require('../../controllers/studentTestController');
+const hwCtrl = require('../../controllers/studentHomeworkController');
 const uploadRouter = require('./upload');
 
 // All student-portal routes require a student (not admin/teacher) token.
@@ -26,5 +27,15 @@ router.post('/test-attempts/:attemptId/submit', testCtrl.submitAttempt);
 router.put('/test-attempts/:attemptId/save',    testCtrl.saveProgress);
 router.post('/test-attempts/:attemptId/tab-switch', testCtrl.reportTabSwitch);
 router.get('/test-attempts/:attemptId/review',  testCtrl.getAttemptReview);
+
+// Bài tập về nhà.
+router.get('/homework/assignments',              hwCtrl.getAssignments);
+router.post('/homework/assignments/:id/start',   hwCtrl.startAssignment);
+router.put('/homework/submissions/:id/save',     hwCtrl.saveProgress);
+router.post('/homework/submissions/:id/submit',  hwCtrl.submitAssignment);
+router.post('/homework/submissions/:id/tab-switch', hwCtrl.reportTabSwitch);
+router.post('/homework/submissions/:id/dispute', hwCtrl.sendDispute);
+router.get('/homework/submissions/:id',          hwCtrl.getSubmission);
+router.get('/homework/notifications',            hwCtrl.getHomeworkNotifications);
 
 module.exports = router;

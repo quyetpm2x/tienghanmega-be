@@ -24,6 +24,15 @@ const audioUpload = multer({
   },
 });
 
+const videoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = /^video\/(mp4|webm|quicktime|x-msvideo)$/.test(file.mimetype);
+    ok ? cb(null, true) : cb(new AppError('Chỉ chấp nhận file video (mp4, webm, mov)', 400));
+  },
+});
+
 // Store Blob của production dùng token riêng (BLOB_READ_WRITE_TOKEN_PRODUCT) khác
 // với token mặc định (BLOB_READ_WRITE_TOKEN) mà @vercel/blob tự đọc — phải truyền
 // tường minh, nếu không put() sẽ trỏ nhầm store ("This store does not exist").
@@ -43,4 +52,4 @@ async function uploadToBlob(file, folder, defaultExt = '') {
   return `/cdn/${folder}/${name}`;
 }
 
-module.exports = { imageUpload, audioUpload, uploadToBlob };
+module.exports = { imageUpload, audioUpload, videoUpload, uploadToBlob };

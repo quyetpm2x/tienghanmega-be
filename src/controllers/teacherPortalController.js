@@ -3,7 +3,15 @@ const Student = require('../models/Student');
 const StudentAttendance = require('../models/StudentAttendance');
 const Account = require('../models/Account');
 const Teacher = require('../models/Teacher');
+const TeacherSession = require('../models/TeacherSession');
+const TeacherBonus = require('../models/TeacherBonus');
+const TeacherPayment = require('../models/TeacherPayment');
+const ReferralCommission = require('../models/ReferralCommission');
+const PayrollSettings = require('../models/PayrollSettings');
 const { generateUniqueReferralCode, buildMyReferrals } = require('../utils/referral');
+const {
+  DEFAULT_PAY_PERIOD_START_DAY, todayDateStr, payPeriodLabel, payPeriodBounds, currentPayPeriodLabel, buildTeacherLedger,
+} = require('../utils/teacherLedger');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
@@ -236,4 +244,84 @@ exports.updateAttendance = async (req, res, next) => {
 
   const session = await StudentAttendance.findByIdAndUpdate(req.params.id, body, { new: true });
   success(res, session, 'Cập nhật thành công');
+};
+
+// ── Lương/thưởng của chính giáo viên — tính HOÀN TOÀN ở backend, chỉ trả về số
+// tiền cuối cùng theo từng kỳ lương (không trả ratePerSession hay dữ liệu giáo
+// viên khác). Dùng chung công thức "kỳ lương" (payPeriodLabel/Bounds) và cách
+// gán buổi dạy theo teacherAssignments với trang Lương/Thanh toán của admin —
+// xem src/utils/teacherLedger.js — để 2 bên luôn ra cùng 1 con số.
+exports.getMySalary = async (req, res) => {
+  const teacherId = req.teacherAccount.teacherId._id;
+  const todayStr = todayDateStr();
+  const settings = await PayrollSettings.findOne();
+  const startDay = settings?.startDay || DEFAULT_PAY_PERIOD_START_DAY;
+
+  // Lớp giáo viên đang/đã từng phụ trách — kể cả lớp cũ chưa có teacherAssignments
+  // (fallback dùng teacherId hiện tại, xử lý trong buildTeacherLedger).
+  const classes = await Class.find({ $or: [{ teacherId }, { 'teacherAssignments.teacherId': teacherId }] })
+    .select('name teacher teacherId days startDate endDate ratePerSession teacherAssignments').lean();
+  const classNames = classes.map(c => c.name);
+
+  const [overrides, bonuses, commissions, payments] = await Promise.all([
+    TeacherSession.find({ className: { $in: classNames } }).select('className date status').lean(),
+    TeacherBonus.find({ teacherId }).select('type amount date className note').lean(),
+    ReferralCommission.find({ referrerModel: 'Teacher', referrerId: teacherId })
+      .populate('referredStudentId', 'name').select('amount createdAt referredStudentId').lean(),
+    TeacherPayment.find({ teacherId }).select('periodStart periodEnd amountPaid paidDate note').lean(),
+  ]);
+
+  const commissionItems = commissions.map(c => ({
+    date: (c.createdAt instanceof Date ? c.createdAt.toISOString() : String(c.createdAt)).slice(0, 10),
+    amount: c.amount, referredStudentName: c.referredStudentId?.name,
+  }));
+
+  const ledger = buildTeacherLedger({ teacherId, classes, overrides, bonuses, commissions: commissionItems, todayStr });
+
+  const periodMap = new Map();
+  ledger.forEach(item => {
+    const label = payPeriodLabel(item.date, startDay);
+    if (!periodMap.has(label)) periodMap.set(label, []);
+    periodMap.get(label).push(item);
+  });
+  const currentPeriod = currentPayPeriodLabel(startDay);
+  if (!periodMap.has(currentPeriod)) periodMap.set(currentPeriod, []);
+
+  const periods = Array.from(periodMap.entries()).map(([label, items]) => {
+    const { start, end } = payPeriodBounds(label, startDay);
+    const sessionItems = items.filter(i => i.kind === 'session');
+    const bonusItems = items.filter(i => i.kind === 'bonus');
+    const penaltyItems = items.filter(i => i.kind === 'penalty');
+    const commissionLineItems = items.filter(i => i.kind === 'commission');
+    const sessionsByClass = Object.values(sessionItems.reduce((acc, l) => {
+      if (!acc[l.className]) acc[l.className] = { className: l.className, count: 0, rate: l.amount, amount: 0 };
+      acc[l.className].count += 1;
+      acc[l.className].amount += l.amount;
+      return acc;
+    }, {}));
+    const sessionTotal = sessionItems.reduce((s, l) => s + l.amount, 0);
+    const bonusTotal = bonusItems.reduce((s, l) => s + l.amount, 0);
+    const penaltyTotal = penaltyItems.reduce((s, l) => s + l.amount, 0); // đã âm sẵn
+    const commissionTotal = commissionLineItems.reduce((s, l) => s + l.amount, 0);
+    const totalAmount = sessionTotal + bonusTotal + penaltyTotal + commissionTotal;
+    const payment = payments.find(p => p.periodStart.slice(0, 7) === label) || null;
+    return {
+      period: label, periodStart: start, periodEnd: end,
+      sessionCount: sessionItems.length, sessionTotal, sessionsByClass,
+      // Chi tiết từng buổi (ngày + lớp) — để giáo viên xem "tháng này dạy ngày nào,
+      // lớp nào" thay vì chỉ thấy số buổi gộp theo lớp.
+      sessionItems: [...sessionItems].sort((a, b) => a.date.localeCompare(b.date)).map(l => ({ date: l.date, className: l.className, amount: l.amount })),
+      bonusItems: bonusItems.map(b => ({ date: b.date, amount: b.amount, note: b.note })),
+      penaltyItems: penaltyItems.map(b => ({ date: b.date, amount: b.amount, note: b.note })),
+      commissionItems: commissionLineItems.map(c => ({ date: c.date, amount: c.amount, note: c.note })),
+      totalAmount,
+      isPaid: !!payment,
+      paidAmount: payment ? payment.amountPaid : null,
+      paidDate: payment ? payment.paidDate : null,
+    };
+  }).sort((a, b) => b.period.localeCompare(a.period));
+
+  const totalAllTime = periods.reduce((s, p) => s + p.totalAmount, 0);
+
+  success(res, { currentPeriod, startDay, totalAllTime, periods });
 };

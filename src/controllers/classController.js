@@ -15,6 +15,40 @@ async function resolveTeacherId(teacherName) {
   return teacher ? teacher._id : null;
 }
 
+function todayDateStr() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function addDaysStr(dateStr, delta) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + delta);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+// Ghi/đóng 1 đoạn trong teacherAssignments khi admin đổi Class.teacher — để buổi
+// dạy trong quá khứ (trước ngày đổi) vẫn tính lương cho giáo viên cũ, chỉ buổi từ
+// hôm nay trở đi mới tính cho giáo viên mới. Trả về mảng assignments mới (chưa lưu).
+function withTeacherHandoff(existingClass, newTeacherId, newTeacherName) {
+  const current = existingClass.teacherAssignments && existingClass.teacherAssignments.length
+    ? existingClass.teacherAssignments.map(a => (a.toObject ? a.toObject() : a))
+    : (existingClass.teacher
+        ? [{ teacherId: existingClass.teacherId, teacherName: existingClass.teacher, fromDate: existingClass.startDate || todayDateStr(), toDate: null }]
+        : []);
+  const today = todayDateStr();
+  const open = current.find(a => !a.toDate);
+  if (open && open.fromDate === today) {
+    // Sửa lại ngay trong ngày (VD admin bấm nhầm) — cập nhật thẳng, không tạo đoạn mới.
+    open.teacherId = newTeacherId;
+    open.teacherName = newTeacherName;
+    return current;
+  }
+  if (open) open.toDate = addDaysStr(today, -1);
+  if (newTeacherName) current.push({ teacherId: newTeacherId, teacherName: newTeacherName, fromDate: today, toDate: null });
+  return current;
+}
+
 // Class.enrolled is a stored field with no code path that keeps it in sync — attach
 // the real Student count instead, so every consumer (admin list, edit form, public
 // banner) sees the same accurate number.
@@ -65,7 +99,10 @@ exports.create = async (req, res, next) => {
     if (count >= MAX_HOMEPAGE_CLASSES) return next(new AppError('Đã đạt tối đa 5 lớp hiển thị banner homepage', 400));
   }
   const teacherId = await resolveTeacherId(req.body.teacher);
-  const cls = await Class.create({ ...req.body, teacherId });
+  const teacherAssignments = req.body.teacher
+    ? [{ teacherId, teacherName: req.body.teacher, fromDate: req.body.startDate || todayDateStr(), toDate: null }]
+    : [];
+  const cls = await Class.create({ ...req.body, teacherId, teacherAssignments });
   success(res, cls, 'Tạo lớp học thành công', 201);
 };
 
@@ -79,7 +116,14 @@ exports.update = async (req, res, next) => {
     }
   }
   const body = { ...req.body };
-  if ('teacher' in body) body.teacherId = await resolveTeacherId(body.teacher);
+  if ('teacher' in body) {
+    const newTeacherId = await resolveTeacherId(body.teacher);
+    body.teacherId = newTeacherId;
+    const existing = await Class.findById(req.params.id).select('teacher teacherId startDate teacherAssignments');
+    if (existing && existing.teacher !== body.teacher) {
+      body.teacherAssignments = withTeacherHandoff(existing, newTeacherId, body.teacher);
+    }
+  }
   const cls = await Class.findByIdAndUpdate(req.params.id, body, { new: true, runValidators: true });
   if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
   // Student.level là bản sao chụp course của lớp tại thời điểm thêm/chuyển lớp — nếu
