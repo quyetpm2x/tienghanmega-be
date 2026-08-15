@@ -3,6 +3,7 @@ const TopikTest = require('../models/TopikTest');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 const { protect } = require('../middlewares/auth');
+const { permit } = require('../middlewares/permit');
 
 // Public: 1 đề đang active, chọn ngẫu nhiên nếu có nhiều đề — trả null nếu chưa có đề
 // nào (frontend fallback về placeholder "sắp ra mắt").
@@ -14,23 +15,23 @@ router.get('/active', async (req, res) => {
 });
 
 // Admin
-router.get('/', protect, async (req, res) => {
+router.get('/', protect, permit('tests.topikView'), async (req, res) => {
   success(res, await TopikTest.find().sort({ createdAt: -1 }).populate('questions.questionId'));
 });
-router.get('/:id', protect, async (req, res, next) => {
+router.get('/:id', protect, permit('tests.topikView'), async (req, res, next) => {
   const test = await TopikTest.findById(req.params.id).populate('questions.questionId');
   if (!test) return next(new AppError('Không tìm thấy đề thi', 404));
   success(res, test);
 });
-router.post('/', protect, async (req, res) => {
+router.post('/', protect, permit('tests.topikCreate'), async (req, res) => {
   success(res, await TopikTest.create(req.body), 'Tạo đề thi thành công', 201);
 });
-router.put('/:id', protect, async (req, res, next) => {
+router.put('/:id', protect, permit('tests.topikUpdate'), async (req, res, next) => {
   const test = await TopikTest.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true }).populate('questions.questionId');
   if (!test) return next(new AppError('Không tìm thấy đề thi', 404));
   success(res, test, 'Cập nhật thành công');
 });
-router.delete('/:id', protect, async (req, res, next) => {
+router.delete('/:id', protect, permit('tests.topikDelete'), async (req, res, next) => {
   const test = await TopikTest.findByIdAndDelete(req.params.id);
   if (!test) return next(new AppError('Không tìm thấy đề thi', 404));
   success(res, null, 'Xóa thành công');

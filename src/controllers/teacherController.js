@@ -7,8 +7,13 @@ const AppError = require('../utils/AppError');
 // public (unauthenticated) teacher endpoints, only when req.admin is set.
 const SENSITIVE_FIELDS = '-totalPaidSalary -phone -adminNote';
 
+// includeInactive: chỉ admin mới được xem GV đã nghỉ việc (isActive:false) — dữ
+// liệu lương/lịch sử của họ vẫn còn nguyên trong DB (remove() chỉ soft-delete),
+// nhưng mặc định ẩn khỏi mọi danh sách để không gây rối; admin bật cờ này lên khi
+// cần tra cứu/thanh toán nốt lương còn nợ hoặc khôi phục lại.
 exports.getAll = async (req, res) => {
-  const query = Teacher.find({ isActive: true }).sort({ createdAt: 1 });
+  const filter = req.admin && req.query.includeInactive === 'true' ? {} : { isActive: true };
+  const query = Teacher.find(filter).sort({ createdAt: 1 });
   if (!req.admin) query.select(SENSITIVE_FIELDS);
   const teachers = await query;
 

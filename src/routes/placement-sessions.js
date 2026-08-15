@@ -7,13 +7,14 @@ const Registration = require('../models/Registration');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 const { protect } = require('../middlewares/auth');
+const { permit } = require('../middlewares/permit');
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 ngày, không cấu hình qua UI
 
 // Admin: tạo phiên test cho một lead — lead lấy từ Registration (registrationId)
 // HOẶC nhập tay (name+phone); đề lấy cụ thể (testId) HOẶC random trong 1 pool
 // (randomPool) — server tự chốt testId ngay lúc tạo, không random lại sau này.
-router.post('/', protect, async (req, res, next) => {
+router.post('/', protect, permit('tests.placementCreate'), async (req, res, next) => {
   const { registrationId, name, phone, email, testId, randomPool } = req.body;
 
   let leadName = name, leadPhone = phone, leadEmail = email || '';
@@ -49,7 +50,7 @@ router.post('/', protect, async (req, res, next) => {
 
 // Admin: danh sách phiên — status tính runtime (không lưu field riêng để tránh
 // lệch dữ liệu giữa lúc tạo và lúc query).
-router.get('/', protect, async (req, res) => {
+router.get('/', protect, permit('tests.placementView'), async (req, res) => {
   const { status } = req.query;
   // KHÔNG dùng .lean() ở đây: .lean() trả document thô, bỏ qua toàn bộ default
   // value của schema — với câu hỏi cũ trong ngân hàng thiếu sẵn field
@@ -73,7 +74,7 @@ router.get('/', protect, async (req, res) => {
 });
 
 // Admin: chấm tự luận + ghi kết quả xếp lớp
-router.patch('/:id/review', protect, async (req, res, next) => {
+router.patch('/:id/review', protect, permit('tests.placementUpdate'), async (req, res, next) => {
   const { essayScore, essayFeedback, placementNote, markContacted } = req.body;
   const update = {};
   if (essayScore !== undefined) update.essayScore = essayScore;
@@ -88,7 +89,7 @@ router.patch('/:id/review', protect, async (req, res, next) => {
 
 // Admin: ghi lại liên kết Student thật đã tạo từ phiên này (Student được tạo
 // riêng qua /admin/students — route này chỉ đánh dấu để tránh chuyển trùng).
-router.patch('/:id/convert', protect, async (req, res, next) => {
+router.patch('/:id/convert', protect, permit('tests.placementUpdate'), async (req, res, next) => {
   const { studentId } = req.body;
   if (!studentId) return next(new AppError('Thiếu studentId', 400));
   const session = await PlacementSession.findByIdAndUpdate(req.params.id, { convertedStudentId: studentId }, { new: true });

@@ -2,6 +2,7 @@ const router = require('express').Router();
 const Vocab = require('../models/Vocab');
 const { success } = require('../utils/response');
 const { protect } = require('../middlewares/auth');
+const { permit } = require('../middlewares/permit');
 const AppError = require('../utils/AppError');
 
 const GAME_TYPES = ['flashcard', 'matching', 'speed', 'fill'];
@@ -14,11 +15,11 @@ router.get('/', async (req, res) => {
   success(res, await Vocab.find(filter).sort({ order: 1, createdAt: 1 }));
 });
 
-router.post('/', protect, async (req, res) => { success(res, await Vocab.create(req.body), 'Tạo thành công', 201) });
+router.post('/', protect, permit('games.create'), async (req, res) => { success(res, await Vocab.create(req.body), 'Tạo thành công', 201) });
 
 // Thêm/import hàng loạt — dùng chung cho luồng "thêm nhiều từ qua form" và "import
 // Excel" ở trang admin. Bỏ qua item thiếu kr/vn/rom thay vì chặn cả lô.
-router.post('/bulk', protect, async (req, res, next) => {
+router.post('/bulk', protect, permit('games.create'), async (req, res, next) => {
   const { gameType, items } = req.body;
   if (!GAME_TYPES.includes(gameType)) return next(new AppError('gameType không hợp lệ', 400));
   if (!Array.isArray(items) || items.length === 0) return next(new AppError('Danh sách từ trống', 400));
@@ -34,11 +35,11 @@ router.post('/bulk', protect, async (req, res, next) => {
   success(res, { inserted: docs.length, skipped }, 'Đã thêm từ vựng');
 });
 
-router.put('/:id', protect, async (req, res) => {
+router.put('/:id', protect, permit('games.update'), async (req, res) => {
   const doc = await Vocab.findByIdAndUpdate(req.params.id, req.body, { new: true });
   success(res, doc, 'Cập nhật thành công');
 });
-router.delete('/:id', protect, async (req, res) => {
+router.delete('/:id', protect, permit('games.delete'), async (req, res) => {
   await Vocab.findByIdAndDelete(req.params.id);
   success(res, null, 'Xóa thành công');
 });

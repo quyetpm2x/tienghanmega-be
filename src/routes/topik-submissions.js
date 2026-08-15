@@ -4,6 +4,7 @@ const TestQuestion = require('../models/TestQuestion');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 const { protect } = require('../middlewares/auth');
+const { permit } = require('../middlewares/permit');
 const { imageUpload, audioUpload, uploadToBlob } = require('../utils/uploadHandlers');
 
 // Chống spam nhẹ — không cần thêm dependency: nhớ lần nộp bài gần nhất theo IP trong
@@ -68,7 +69,7 @@ router.post('/upload', (req, res, next) => {
 });
 
 // Admin: danh sách lượt làm bài + xem/chấm tự luận
-router.get('/', protect, async (req, res) => {
+router.get('/', protect, permit('tests.topikView'), async (req, res) => {
   const { essayReviewStatus } = req.query;
   const filter = {};
   if (essayReviewStatus) filter.essayReviewStatus = essayReviewStatus;
@@ -78,7 +79,7 @@ router.get('/', protect, async (req, res) => {
   success(res, list);
 });
 
-router.patch('/:id/review', protect, async (req, res, next) => {
+router.patch('/:id/review', protect, permit('tests.topikUpdate'), async (req, res, next) => {
   const { essayScore, essayFeedback, markContacted } = req.body;
   const update = {};
   if (essayScore !== undefined) update.essayScore = essayScore;

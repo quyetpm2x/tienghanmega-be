@@ -17,7 +17,7 @@ exports.login = async (req, res, next) => {
   }
 
   const token = signToken(admin._id);
-  success(res, { token, admin: { id: admin._id, name: admin.name, username: admin.username, role: admin.role } }, 'Đăng nhập thành công');
+  success(res, { token, admin: { id: admin._id, name: admin.name, username: admin.username, role: admin.role, permissions: admin.permissions } }, 'Đăng nhập thành công');
 };
 
 exports.me = async (req, res) => {

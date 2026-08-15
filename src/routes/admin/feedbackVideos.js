@@ -1,10 +1,11 @@
 const router = require('express').Router();
 const ctrl = require('../../controllers/feedbackVideoController');
+const { permit } = require('../../middlewares/permit');
 
-router.get('/',        ctrl.getAll);
-router.post('/',       ctrl.create);
-router.put('/reorder', ctrl.reorder);
-router.put('/:id',     ctrl.update);
-router.delete('/:id',  ctrl.remove);
+router.get('/',        permit('display.feedbackView'), ctrl.getAll);
+router.post('/',       permit('display.feedbackCreate'), ctrl.create);
+router.put('/reorder', permit('display.feedbackUpdate'), ctrl.reorder);
+router.put('/:id',     permit('display.feedbackUpdate'), ctrl.update);
+router.delete('/:id',  permit('display.feedbackDelete'), ctrl.remove);
 
 module.exports = router;

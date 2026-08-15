@@ -1,12 +1,13 @@
 const router = require('express').Router();
 const { protect } = require('../../middlewares/auth');
+const { permit } = require('../../middlewares/permit');
 const { getStats } = require('../../controllers/dashboardController');
 
 // All admin routes require auth
 router.use(protect);
 
-router.get('/dashboard', getStats);
-router.get('/visitors', require('../../controllers/ipController').getVisitors);
+router.get('/dashboard', permit('dashboard.view'), getStats);
+router.get('/visitors', permit('visitors.view'), require('../../controllers/ipController').getVisitors);
 router.use('/students', require('./students'));
 router.use('/homework', require('./homework'));
 router.use('/classes', require('./classes'));
@@ -23,6 +24,7 @@ router.use('/faqs', require('./faqs'));
 router.use('/levels', require('./levels'));
 router.use('/registrations', require('../registrations'));
 router.use('/teachers', require('../teachers'));
+router.use('/admins', require('./admins'));
 router.use('/teacher-accounts', require('./teacherAccounts'));
 router.use('/student-accounts', require('./studentAccounts'));
 router.use('/test-questions', require('./testQuestions'));
