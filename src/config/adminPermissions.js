@@ -51,8 +51,9 @@ const PERMISSIONS = [
   { key: 'classes.update', cluster: 'classes', crud: 'update', label: 'Sửa thông tin lớp (gồm bật/tắt + sắp xếp hiển thị trang chủ / lịch công khai)' },
   { key: 'classes.delete', cluster: 'classes', crud: 'delete', label: 'Xoá lớp' },
   { key: 'classes.transferTeacher', cluster: 'classes', crud: 'update', label: 'Đổi giáo viên phụ trách' },
-  { key: 'classes.editTransferDate', cluster: 'classes', crud: 'update', label: 'Sửa ngày hiệu lực đổi giáo viên' },
+  { key: 'classes.editTransferDate', cluster: 'classes', crud: 'update', label: 'Sửa ngày trong lịch sử giáo viên (gồm cả ngày bắt đầu của giáo viên đầu tiên)' },
   { key: 'classes.undoTransfer', cluster: 'classes', crud: 'update', label: 'Hoàn tác lần đổi giáo viên gần nhất' },
+  { key: 'classes.correctAssignmentTeacher', cluster: 'classes', crud: 'update', label: 'Sửa lại tên giáo viên của 1 đoạn lịch sử (khi ghi nhầm, không đổi ngày)' },
   { key: 'classes.viewDetail', cluster: 'classes', crud: 'view', label: 'Xem chi tiết lớp (học sinh/điểm danh)' },
 
   // ── Khoá học ──────────────────────────────────────────────────────────────

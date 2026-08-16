@@ -58,6 +58,8 @@ function effectiveAssignments(c) {
 
 // Buổi dạy CỦA RIÊNG 1 giáo viên (theo teacherId) — chỉ tính buổi rơi đúng vào
 // đoạn thời gian họ phụ trách lớp đó (không tính buổi trước/sau khi đổi giáo viên).
+// status==='substituted' loại buổi đó khỏi số buổi của giáo viên GỐC (không phải họ
+// dạy) — xem thêm pass thứ 2 bên dưới, cộng buổi đó ngược lại cho giáo viên DẠY THAY.
 function buildTeacherSessions(teacherId, classes, overrides, todayStr) {
   const result = [];
   classes.forEach((c) => {
@@ -68,11 +70,20 @@ function buildTeacherSessions(teacherId, classes, overrides, todayStr) {
       const inSegment = segments.some((a) => date >= a.fromDate && (!a.toDate || date <= a.toDate));
       if (!inSegment) return;
       const override = overrides.find((s) => s.className === c.name && s.date === date &&
-        (s.status === 'absent' || s.status === 'rescheduled' || s.status === 'not-taught'));
+        (s.status === 'absent' || s.status === 'rescheduled' || s.status === 'not-taught' || s.status === 'substituted'));
       if (override) { result.push({ date, className: c.name, status: override.status }); return; }
       result.push({ date, className: c.name, status: 'taught' });
     });
   });
+
+  // Buổi giáo viên NÀY dạy THAY cho người khác — không cần nằm trong lịch/lớp họ
+  // đang phụ trách, cộng thẳng thành buổi "đã dạy" theo đúng lớp+ngày của buổi gốc.
+  overrides.forEach((s) => {
+    if (s.status === 'substituted' && String(s.substituteTeacherId || '') === String(teacherId) && s.date <= todayStr) {
+      result.push({ date: s.date, className: s.className, status: 'taught', substituteForTeacherName: s.teacherName, substituteRate: s.substituteRate ?? null });
+    }
+  });
+
   return result;
 }
 
@@ -85,8 +96,9 @@ function buildTeacherLedger({ teacherId, classes, overrides, bonuses, commission
     .filter((s) => s.status === 'taught' || s.status === 'rescheduled')
     .forEach((s) => {
       const cls = classes.find((c) => c.name === s.className);
-      if (!cls || !cls.ratePerSession) return;
-      items.push({ className: s.className, date: s.date, amount: cls.ratePerSession, kind: 'session' });
+      const amount = s.substituteRate ?? cls?.ratePerSession;
+      if (!cls || amount == null) return;
+      items.push({ className: s.className, date: s.date, amount, kind: 'session', substituteForTeacherName: s.substituteForTeacherName, substituteRate: s.substituteRate ?? null });
     });
 
   bonuses.forEach((b) => {

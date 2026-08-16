@@ -37,6 +37,24 @@ function currentAssignments(existingClass) {
         : []);
 }
 
+// Gộp các đoạn LIỀN NHAU (đứng cạnh nhau sau khi sort theo fromDate) mà cùng 1 giáo
+// viên thành 1 đoạn duy nhất — xảy ra khi sửa tên giáo viên của 1 đoạn trùng với
+// giáo viên ngay trước/sau nó, hoặc khi chèn thêm 1 lần đổi trùng tên. Nhận mảng ĐÃ
+// sort tăng dần theo fromDate, trả về mảng mới đã gộp (vẫn tăng dần).
+function mergeAdjacentAssignments(sortedAsc) {
+  const merged = [];
+  for (const seg of sortedAsc) {
+    const last = merged[merged.length - 1];
+    const sameTeacher = last && String(last.teacherId || '') === String(seg.teacherId || '') && last.teacherName === seg.teacherName;
+    if (sameTeacher) {
+      last.toDate = seg.toDate;
+    } else {
+      merged.push({ ...seg });
+    }
+  }
+  return merged;
+}
+
 // Class.enrolled is a stored field with no code path that keeps it in sync — attach
 // the real Student count instead, so every consumer (admin list, edit form, public
 // banner) sees the same accurate number.
@@ -122,10 +140,13 @@ exports.update = async (req, res, next) => {
   success(res, cls, 'Cập nhật thành công');
 };
 
-// Đổi giáo viên phụ trách 1 lớp — bắt buộc chọn ngày hiệu lực (không mặc định
-// "hôm nay" như cơ chế cũ), để admin tự quyết định buổi hôm nay tính cho ai nếu
-// đổi giữa chừng buổi học. Đóng đoạn cũ đúng 1 ngày trước ngày hiệu lực, mở đoạn
-// mới từ đúng ngày hiệu lực — giữ nguyên lịch sử để tính lương đúng từng giáo viên.
+// Đổi/chèn giáo viên phụ trách 1 lớp tại 1 ngày hiệu lực bất kỳ — không bắt buộc phải
+// sau đoạn đang mở như trước, có thể chèn vào ĐẦU (trước đoạn sớm nhất), GIỮA (cắt đôi
+// 1 đoạn đã đóng) hay CUỐI (sau đoạn đang mở, hành vi cũ) lịch sử. Cách làm: thêm đoạn
+// mới vào mảng rồi sort lại theo fromDate, sau đó tính lại toDate của TỪNG đoạn dựa
+// theo đúng thứ tự mới (đoạn nào cũng kết thúc đúng 1 ngày trước khi đoạn kế tiếp bắt
+// đầu, đoạn cuối cùng luôn để ngỏ) — tự động xử lý đúng cả 3 trường hợp trên bằng 1
+// đường logic duy nhất. Gộp lại nếu vô tình tạo ra 2 đoạn liền nhau cùng giáo viên.
 exports.transferTeacher = async (req, res, next) => {
   const { teacherName, effectiveDate } = req.body;
   if (!teacherName || !teacherName.trim()) return next(new AppError('Vui lòng chọn giáo viên', 400));
@@ -135,35 +156,39 @@ exports.transferTeacher = async (req, res, next) => {
   if (!existing) return next(new AppError('Không tìm thấy lớp học', 404));
 
   const newTeacherId = await resolveTeacherId(teacherName);
-  const current = currentAssignments(existing);
-  const open = current.find(a => !a.toDate);
+  const current = currentAssignments(existing).sort((a, b) => a.fromDate.localeCompare(b.fromDate));
 
-  if (open) {
-    if (effectiveDate <= open.fromDate) {
-      return next(new AppError('Ngày hiệu lực phải sau ngày bắt đầu phụ trách của giáo viên hiện tại', 400));
-    }
-    if (String(open.teacherId) === String(newTeacherId)) {
-      return next(new AppError('Giáo viên này đang phụ trách lớp rồi', 400));
-    }
-    open.toDate = addDaysStr(effectiveDate, -1);
+  if (current.some(a => a.fromDate === effectiveDate)) {
+    return next(new AppError('Đã có 1 lần đổi giáo viên bắt đầu đúng ngày này rồi — dùng "Sửa lại tên giáo viên" nếu muốn đổi tên cho đúng ngày đó.', 400));
   }
-  current.push({ teacherId: newTeacherId, teacherName, fromDate: effectiveDate, toDate: null });
 
-  existing.teacherAssignments = current;
-  existing.teacher = teacherName;
-  existing.teacherId = newTeacherId;
+  current.push({ teacherId: newTeacherId, teacherName, fromDate: effectiveDate, toDate: null });
+  current.sort((a, b) => a.fromDate.localeCompare(b.fromDate));
+  for (let i = 0; i < current.length; i++) {
+    current[i].toDate = i === current.length - 1 ? null : addDaysStr(current[i + 1].fromDate, -1);
+  }
+
+  const merged = mergeAdjacentAssignments(current);
+  const last = merged[merged.length - 1];
+  existing.teacherAssignments = merged;
+  existing.teacher = last.teacherName;
+  existing.teacherId = last.teacherId;
   await existing.save();
   success(res, existing, 'Đã cập nhật giáo viên phụ trách');
 };
 
-// Sửa lại ngày hiệu lực của 1 lần đổi giáo viên ĐÃ có trong lịch sử (VD admin chọn
-// nhầm ngày lúc chuyển giao) — xác định đúng đoạn cần sửa bằng fromDate hiện tại của
-// nó (không dùng index, tránh lệch nếu mảng bị sắp xếp khác đi ở đâu đó), rồi kéo
-// theo cập nhật toDate của đoạn liền trước cho khớp — không đụng đoạn đầu tiên (đoạn
-// đó là lúc lớp mới có giáo viên đầu tiên, không phải 1 lần "đổi").
+// Sửa lại "từ ngày ... đến ngày ..." của 1 đoạn ĐÃ có trong lịch sử — xác định đúng
+// đoạn cần sửa bằng fromDate hiện tại của nó (không dùng index, tránh lệch nếu mảng
+// bị sắp xếp khác đi ở đâu đó). Admin tự chọn cả 2 đầu, KHÔNG còn tự động kéo theo
+// đóng/mở đoạn liền kề như trước — cho phép chủ động để lại KHOẢNG TRỐNG (lớp tạm
+// thời không ai phụ trách 1 vài ngày, VD giữa 2 giáo viên có khoảng nghỉ) miễn không
+// CHỒNG LẤN với đoạn liền kề (chồng lấn = 2 giáo viên cùng được ghi nhận 1 ngày,
+// không rõ ai mới thật sự dạy — luôn chặn). Cảnh báo khoảng trống (nếu có) tính ở FE
+// bằng cách so đoạn mới với 2 đoạn liền kề, không cần BE trả riêng.
 exports.updateTeacherAssignmentDate = async (req, res, next) => {
-  const { oldFromDate, newFromDate } = req.body;
+  const { oldFromDate, newFromDate, newToDate } = req.body;
   if (!oldFromDate || !newFromDate) return next(new AppError('Thiếu dữ liệu ngày', 400));
+  if (newToDate && newToDate < newFromDate) return next(new AppError('Ngày kết thúc phải sau ngày bắt đầu', 400));
 
   const existing = await Class.findById(req.params.id);
   if (!existing) return next(new AppError('Không tìm thấy lớp học', 404));
@@ -171,19 +196,32 @@ exports.updateTeacherAssignmentDate = async (req, res, next) => {
   const current = currentAssignments(existing).sort((a, b) => a.fromDate.localeCompare(b.fromDate));
   const idx = current.findIndex(a => a.fromDate === oldFromDate);
   if (idx === -1) return next(new AppError('Không tìm thấy giai đoạn phân công tương ứng', 404));
-  if (idx === 0) return next(new AppError('Không thể sửa ngày của giáo viên đầu tiên (không phải 1 lần đổi giáo viên)', 400));
 
-  const prev = current[idx - 1];
-  const nextSeg = current[idx + 1];
-  if (newFromDate <= prev.fromDate) return next(new AppError('Ngày mới phải sau ngày bắt đầu của giáo viên trước đó', 400));
-  if (nextSeg && newFromDate >= nextSeg.fromDate) return next(new AppError('Ngày mới phải trước ngày bắt đầu của giáo viên kế tiếp', 400));
+  const isLast = idx === current.length - 1;
+  if (!isLast && !newToDate) return next(new AppError('Đoạn này không phải đoạn gần nhất — phải chọn ngày kết thúc', 400));
+
+  if (idx > 0) {
+    const prev = current[idx - 1];
+    if (newFromDate <= prev.toDate) return next(new AppError('Ngày bắt đầu chồng lấn với đoạn trước đó', 400));
+  }
+  if (!isLast) {
+    const nextSeg = current[idx + 1];
+    if (newToDate >= nextSeg.fromDate) return next(new AppError('Ngày kết thúc chồng lấn với đoạn kế tiếp', 400));
+  }
 
   current[idx].fromDate = newFromDate;
-  prev.toDate = addDaysStr(newFromDate, -1);
+  current[idx].toDate = newToDate || null;
 
-  existing.teacherAssignments = current;
+  const merged = mergeAdjacentAssignments(current);
+  existing.teacherAssignments = merged;
+  // Đoạn đang mở (nếu còn) mới là giáo viên "hiện tại" — nếu admin vừa đóng hẳn đoạn
+  // cuối cùng (chọn ngày kết thúc cho đoạn gần nhất) thì lớp tạm thời không có giáo
+  // viên phụ trách, phải phản ánh đúng ở teacher/teacherId top-level.
+  const openSeg = merged.find(a => !a.toDate);
+  existing.teacher = openSeg ? openSeg.teacherName : '';
+  existing.teacherId = openSeg ? openSeg.teacherId : null;
   await existing.save();
-  success(res, existing, 'Đã cập nhật ngày đổi giáo viên');
+  success(res, existing, 'Đã cập nhật ngày');
 };
 
 // Huỷ lần đổi giáo viên GẦN NHẤT (VD admin bấm nhầm giáo viên) — xoá hẳn đoạn đang
@@ -202,11 +240,47 @@ exports.undoTeacherTransfer = async (req, res, next) => {
   const prev = current[current.length - 1];
   prev.toDate = null;
 
-  existing.teacherAssignments = current;
-  existing.teacher = prev.teacherName;
-  existing.teacherId = prev.teacherId;
+  const merged = mergeAdjacentAssignments(current);
+  const last = merged[merged.length - 1];
+  existing.teacherAssignments = merged;
+  existing.teacher = last.teacherName;
+  existing.teacherId = last.teacherId;
   await existing.save();
   success(res, existing, 'Đã huỷ lần đổi giáo viên gần nhất');
+};
+
+// Sửa lại TÊN giáo viên của 1 đoạn BẤT KỲ trong lịch sử (xác định bằng fromDate,
+// giống cách updateTeacherAssignmentDate xác định đoạn cần sửa) — dùng khi admin ghi
+// nhầm giáo viên, dù là đoạn đầu tiên, đoạn giữa hay đoạn đang mở. Khác với
+// transferTeacher: KHÔNG đổi fromDate/toDate, không tạo đoạn mới, chỉ sửa lại đúng
+// người cho đoạn đã có sẵn — tránh mọi lần sửa nhầm đều phải tồn tại vĩnh viễn trong
+// lịch sử. Nếu đoạn được sửa là đoạn đang mở thì đồng bộ luôn teacher/teacherId ở
+// top-level cho khớp.
+exports.correctAssignmentTeacher = async (req, res, next) => {
+  const { fromDate, teacherName } = req.body;
+  if (!fromDate) return next(new AppError('Thiếu dữ liệu ngày', 400));
+  if (!teacherName || !teacherName.trim()) return next(new AppError('Vui lòng chọn giáo viên', 400));
+
+  const existing = await Class.findById(req.params.id);
+  if (!existing) return next(new AppError('Không tìm thấy lớp học', 404));
+
+  const current = currentAssignments(existing).sort((a, b) => a.fromDate.localeCompare(b.fromDate));
+  const seg = current.find(a => a.fromDate === fromDate);
+  if (!seg) return next(new AppError('Không tìm thấy giai đoạn phân công tương ứng', 404));
+
+  const newTeacherId = await resolveTeacherId(teacherName);
+  seg.teacherName = teacherName;
+  seg.teacherId = newTeacherId;
+
+  const merged = mergeAdjacentAssignments(current);
+  const last = merged[merged.length - 1];
+  existing.teacherAssignments = merged;
+  if (!last.toDate) {
+    existing.teacher = last.teacherName;
+    existing.teacherId = last.teacherId;
+  }
+  await existing.save();
+  success(res, existing, 'Đã sửa lại giáo viên');
 };
 
 exports.remove = async (req, res, next) => {

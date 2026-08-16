@@ -22,18 +22,48 @@ const AppError = require('../utils/AppError');
 // Whitelist — never leak price/promo/homepage-display config to a teacher.
 const CLASS_FIELDS = 'name course days time capacity startDate endDate status color';
 
+// Lớp giáo viên KHÔNG chính thức phụ trách (không có trong teacherAssignments)
+// nhưng có dạy thay ít nhất 1 buổi ở đó (qua "Phân công dạy thay", TeacherSession
+// status='substituted') — cần cộng thêm vào phạm vi truy cập lịch/lớp/điểm danh
+// bên dưới, để giáo viên dạy thay vẫn thấy đúng lịch dạy thay trong portal của họ
+// (Lớp của tôi, Lịch, điểm danh) — không chỉ được TÍNH LƯƠNG (xem getMySalary).
+async function substituteClassNames(teacherId) {
+  return TeacherSession.find({ status: 'substituted', substituteTeacherId: teacherId }).distinct('className');
+}
+
+// Ngày dạy thay cụ thể theo từng lớp — dùng để FE chỉ hiện ĐÚNG (các) ngày dạy
+// thay trên lịch/chi tiết lớp của giáo viên dạy thay, KHÔNG hiện cả lịch học
+// định kỳ cả lớp (họ không phải giáo viên chính, dạy thay chỉ 1-vài buổi lẻ).
+async function substituteDatesByClass(teacherId) {
+  const rows = await TeacherSession.find({ status: 'substituted', substituteTeacherId: teacherId }).select('className date');
+  return rows.reduce((acc, r) => { (acc[r.className] ||= []).push(r.date); return acc; }, {});
+}
+
 exports.getMyClasses = async (req, res) => {
   const teacherId = req.teacherAccount.teacherId._id;
-  const classes = await Class.find({ teacherId }).select(CLASS_FIELDS).sort({ startDate: -1 });
-  success(res, classes);
+  const formalClasses = await Class.find({ teacherId }).select(CLASS_FIELDS).sort({ startDate: -1 }).lean();
+  const formalNames = new Set(formalClasses.map(c => c.name));
+
+  const subDates = await substituteDatesByClass(teacherId);
+  const subNames = Object.keys(subDates).filter(n => !formalNames.has(n));
+  let subClasses = [];
+  if (subNames.length) {
+    subClasses = await Class.find({ name: { $in: subNames } }).select(CLASS_FIELDS).sort({ startDate: -1 }).lean();
+    subClasses = subClasses.map(c => ({ ...c, substituteDates: subDates[c.name] }));
+  }
+  success(res, [...formalClasses, ...subClasses]);
 };
 
 exports.getMyClass = async (req, res, next) => {
   const teacherId = req.teacherAccount.teacherId._id;
-  const cls = await Class.findOne({ _id: req.params.id, teacherId }).select(CLASS_FIELDS);
+  const formal = await Class.findOne({ _id: req.params.id, teacherId }).select(CLASS_FIELDS).lean();
+  if (formal) return success(res, formal);
+
+  const subDates = await substituteDatesByClass(teacherId);
+  const cls = await Class.findOne({ _id: req.params.id, name: { $in: Object.keys(subDates) } }).select(CLASS_FIELDS).lean();
   // 404, not 403 — don't confirm the class exists if it isn't theirs.
   if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
-  success(res, cls);
+  success(res, { ...cls, substituteDates: subDates[cls.name] });
 };
 
 // Tên các lớp giáo viên đang dạy — dùng làm phạm vi truy cập cho toàn bộ các
@@ -160,7 +190,8 @@ exports.updateMyStudentAccount = async (req, res, next) => {
 // trong buổi đầu; sau khi học sinh tự đổi, giáo viên không còn xem được nữa.
 exports.getClassStudents = async (req, res, next) => {
   const teacherId = req.teacherAccount.teacherId._id;
-  const cls = await Class.findOne({ _id: req.params.id, teacherId }).select('name');
+  const subNames = await substituteClassNames(teacherId);
+  const cls = await Class.findOne({ _id: req.params.id, $or: [{ teacherId }, { name: { $in: subNames } }] }).select('name');
   if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
   const students = await Student.find({ className: cls.name, status: 'active' }).select('name').sort({ name: 1 });
 
@@ -204,7 +235,8 @@ exports.getMyAttendance = async (req, res, next) => {
   const teacherId = req.teacherAccount.teacherId._id;
   const filter = { teacherId };
   if (req.query.classId) {
-    const cls = await Class.findOne({ _id: req.query.classId, teacherId }).select('name');
+    const subNames = await substituteClassNames(teacherId);
+    const cls = await Class.findOne({ _id: req.query.classId, $or: [{ teacherId }, { name: { $in: subNames } }] }).select('name');
     if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
     filter.className = cls.name;
   }
@@ -216,7 +248,8 @@ exports.createAttendance = async (req, res, next) => {
   const teacherId = req.teacherAccount.teacherId._id;
   const { className, date, sessionNum, note, records } = req.body;
 
-  const cls = await Class.findOne({ name: className, teacherId });
+  const subNames = await substituteClassNames(teacherId);
+  const cls = await Class.findOne({ name: className, $or: [{ teacherId }, { name: { $in: subNames } }] });
   if (!cls) return next(new AppError('Lớp học không thuộc quyền quản lý của bạn', 403));
 
   let finalRecords = records;
@@ -259,12 +292,24 @@ exports.getMySalary = async (req, res) => {
 
   // Lớp giáo viên đang/đã từng phụ trách — kể cả lớp cũ chưa có teacherAssignments
   // (fallback dùng teacherId hiện tại, xử lý trong buildTeacherLedger).
-  const classes = await Class.find({ $or: [{ teacherId }, { 'teacherAssignments.teacherId': teacherId }] })
-    .select('name teacher teacherId days startDate endDate ratePerSession teacherAssignments').lean();
+  const classSelect = 'name teacher teacherId days startDate endDate ratePerSession teacherAssignments';
+  let classes = await Class.find({ $or: [{ teacherId }, { 'teacherAssignments.teacherId': teacherId }] })
+    .select(classSelect).lean();
+
+  // Lớp giáo viên này KHÔNG hề phụ trách nhưng có dạy thay 1 buổi ở đó (ngoại lệ 1
+  // buổi qua "Phân công dạy thay", không đụng teacherAssignments) — vẫn cần lấy về
+  // classInfo (đặc biệt ratePerSession) mới tính được tiền cho buổi dạy thay đó.
   const classNames = classes.map(c => c.name);
+  const subClassNames = await TeacherSession.find({ status: 'substituted', substituteTeacherId: teacherId }).distinct('className');
+  const missingClassNames = subClassNames.filter(n => !classNames.includes(n));
+  if (missingClassNames.length) {
+    const extraClasses = await Class.find({ name: { $in: missingClassNames } }).select(classSelect).lean();
+    classes = classes.concat(extraClasses);
+  }
+  const allClassNames = classes.map(c => c.name);
 
   const [overrides, bonuses, commissions, payments] = await Promise.all([
-    TeacherSession.find({ className: { $in: classNames } }).select('className date status').lean(),
+    TeacherSession.find({ className: { $in: allClassNames } }).select('className date status teacherName substituteTeacherId substituteRate').lean(),
     TeacherBonus.find({ teacherId }).select('type amount date className note').lean(),
     ReferralCommission.find({ referrerModel: 'Teacher', referrerId: teacherId })
       .populate('referredStudentId', 'name').select('amount createdAt referredStudentId').lean(),
@@ -294,7 +339,8 @@ exports.getMySalary = async (req, res) => {
     const penaltyItems = items.filter(i => i.kind === 'penalty');
     const commissionLineItems = items.filter(i => i.kind === 'commission');
     const sessionsByClass = Object.values(sessionItems.reduce((acc, l) => {
-      if (!acc[l.className]) acc[l.className] = { className: l.className, count: 0, rate: l.amount, amount: 0 };
+      if (!acc[l.className]) acc[l.className] = { className: l.className, count: 0, rate: l.amount, amount: 0, mixedRate: false };
+      if (acc[l.className].count > 0 && acc[l.className].rate !== l.amount) acc[l.className].mixedRate = true;
       acc[l.className].count += 1;
       acc[l.className].amount += l.amount;
       return acc;
@@ -310,7 +356,7 @@ exports.getMySalary = async (req, res) => {
       sessionCount: sessionItems.length, sessionTotal, sessionsByClass,
       // Chi tiết từng buổi (ngày + lớp) — để giáo viên xem "tháng này dạy ngày nào,
       // lớp nào" thay vì chỉ thấy số buổi gộp theo lớp.
-      sessionItems: [...sessionItems].sort((a, b) => a.date.localeCompare(b.date)).map(l => ({ date: l.date, className: l.className, amount: l.amount })),
+      sessionItems: [...sessionItems].sort((a, b) => a.date.localeCompare(b.date)).map(l => ({ date: l.date, className: l.className, amount: l.amount, substituteForTeacherName: l.substituteForTeacherName || null })),
       bonusItems: bonusItems.map(b => ({ date: b.date, amount: b.amount, note: b.note })),
       penaltyItems: penaltyItems.map(b => ({ date: b.date, amount: b.amount, note: b.note })),
       commissionItems: commissionLineItems.map(c => ({ date: c.date, amount: c.amount, note: c.note })),
