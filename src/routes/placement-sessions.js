@@ -97,6 +97,27 @@ router.patch('/:id/convert', protect, permit('tests.placementUpdate'), async (re
   success(res, session, 'Cập nhật thành công');
 });
 
+// Public: khách TỰ tạo phiên (không cần admin gửi link trước) — CHỈ áp dụng
+// cho đề đang bật showOnHomepage (khác hẳn route tạo phiên phía admin ở trên,
+// vốn yêu cầu quyền + không giới hạn theo cờ này). Trả về token để FE chuyển
+// thẳng sang /test-dau-vao/[token] — dùng lại nguyên vẹn luồng làm bài/nộp
+// bài/token 1-lần/hết hạn 7 ngày đã có, không cần xây thêm 1 luồng riêng.
+router.post('/public-start', async (req, res, next) => {
+  const { name, phone, email, testId } = req.body;
+  if (!name || !phone) return next(new AppError('Vui lòng nhập tên và số điện thoại', 400));
+  const test = await PlacementTest.findOne({ _id: testId, showOnHomepage: true });
+  if (!test) return next(new AppError('Đề test không khả dụng, vui lòng thử lại', 404));
+
+  const token = crypto.randomBytes(24).toString('hex');
+  const session = await PlacementSession.create({
+    registrationId: null,
+    name, phone, email: email || '',
+    testId: test._id, token,
+    expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+  });
+  success(res, { token: session.token }, 'Tạo phiên test thành công', 201);
+});
+
 // Public: lấy đề theo token — không đăng nhập. Không lộ thông tin phiên khác.
 router.get('/token/:token', async (req, res, next) => {
   const session = await PlacementSession.findOne({ token: req.params.token })
