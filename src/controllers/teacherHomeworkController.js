@@ -21,7 +21,7 @@ exports.getQuestions = async (req, res) => {
   success(res, questions);
 };
 
-const VALID_ANSWER_TYPES = ['text', 'multiple_choice', 'video', 'audio'];
+const VALID_ANSWER_TYPES = ['text', 'multiple_choice', 'video', 'audio', 'image'];
 
 exports.createQuestion = async (req, res, next) => {
   const { question, youtubeUrl, image, audioUrl, answerTypes, options, answerIndices, points } = req.body;

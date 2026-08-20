@@ -11,8 +11,10 @@ const homeworkQuestionSchema = new mongoose.Schema({
   youtubeUrl: { type: String, default: '' },
   image: { type: String, default: '' },
   audioUrl: { type: String, default: '' },
+  // 'audio' giữ lại trong enum chỉ để KHÔNG phá dữ liệu câu hỏi cũ đã có sẵn dạng
+  // này — form tạo/sửa câu hỏi ở FE không còn cho chọn 'audio' cho câu MỚI nữa.
   answerTypes: {
-    type: [{ type: String, enum: ['text', 'multiple_choice', 'video', 'audio'] }],
+    type: [{ type: String, enum: ['text', 'multiple_choice', 'video', 'audio', 'image'] }],
     validate: v => Array.isArray(v) && v.length > 0,
   },
   // Chỉ dùng khi answerTypes bao gồm 'multiple_choice'.

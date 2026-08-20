@@ -76,7 +76,7 @@ exports.startAssignment = async (req, res, next) => {
         answeredAs: a?.answeredAs || null,
         // Tiền tố "answer" để phân biệt với audioUrl ở trên (âm thanh của ĐỀ BÀI, không
         // phải bài học sinh đã nộp/lưu tạm).
-        selectedIndices: a?.selectedIndices || [], text: a?.text || '', answerVideoUrl: a?.videoUrl || '', answerAudioUrl: a?.audioUrl || '',
+        selectedIndices: a?.selectedIndices || [], text: a?.text || '', answerVideoUrl: a?.videoUrl || '', answerAudioUrl: a?.audioUrl || '', answerImageUrl: a?.imageUrl || '',
       };
     }),
   });
@@ -96,6 +96,7 @@ exports.saveProgress = async (req, res, next) => {
     if (incoming.text !== undefined) obj.text = incoming.text;
     if (incoming.videoUrl !== undefined) obj.videoUrl = incoming.videoUrl;
     if (incoming.audioUrl !== undefined) obj.audioUrl = incoming.audioUrl;
+    if (incoming.imageUrl !== undefined) obj.imageUrl = incoming.imageUrl;
     return obj;
   });
   await sub.save();
@@ -141,6 +142,7 @@ exports.submitAssignment = async (req, res, next) => {
         if (incoming.text !== undefined) obj.text = incoming.text;
         if (incoming.videoUrl !== undefined) obj.videoUrl = incoming.videoUrl;
         if (incoming.audioUrl !== undefined) obj.audioUrl = incoming.audioUrl;
+        if (incoming.imageUrl !== undefined) obj.imageUrl = incoming.imageUrl;
       }
       // manualScore giữ null — chờ giảng viên chấm tay.
     }
@@ -205,7 +207,7 @@ exports.getSubmission = async (req, res, next) => {
       answeredAs: a.answeredAs,
       options: a.questionId.options,
       answerIndices: revealAnswers ? a.questionId.answerIndices : undefined,
-      selectedIndices: a.selectedIndices, text: a.text, answerVideoUrl: a.videoUrl, answerAudioUrl: a.audioUrl,
+      selectedIndices: a.selectedIndices, text: a.text, answerVideoUrl: a.videoUrl, answerAudioUrl: a.audioUrl, answerImageUrl: a.imageUrl,
       points: a.points, manualScore: a.manualScore, teacherNote: a.teacherNote,
     })),
   });

@@ -11,19 +11,20 @@ const homeworkSubmissionSchema = new mongoose.Schema({
     // Câu hỏi cho phép nhiều dạng nộp (VD: video HOẶC viết) thì học sinh tự chọn 1
     // dạng để làm — answeredAs ghi lại đã chọn dạng nào, null = chưa chọn/chưa làm.
     // Câu chỉ có 1 answerType thì set sẵn = answerType đó, khỏi cần học sinh chọn.
-    answeredAs: { type: String, enum: ['text', 'multiple_choice', 'video', 'audio', null], default: null },
+    answeredAs: { type: String, enum: ['text', 'multiple_choice', 'video', 'audio', 'image', null], default: null },
     // Tuỳ answeredAs:
     selectedIndices: { type: [Number], default: [] },   // multiple_choice
     text: { type: String, default: '' },                 // text
     videoUrl: { type: String, default: '' },              // video
-    audioUrl: { type: String, default: '' },              // audio
+    audioUrl: { type: String, default: '' },              // audio (giữ lại cho bài nộp cũ)
+    imageUrl: { type: String, default: '' },              // image
     points: { type: Number, default: 0 },                 // snapshot điểm TỐI ĐA của câu
     // Điểm THỰC NHẬN cuối cùng của câu — trắc nghiệm được set tự động ngay lúc nộp
-    // bài (0 hoặc points), text/video/audio giữ null cho tới khi giảng viên chấm tay.
+    // bài (0 hoặc points), text/video/audio/image giữ null cho tới khi giảng viên chấm tay.
     // null = còn đang chờ chấm (dùng để tính pendingManualGrading).
     manualScore: { type: Number, default: null },
     // Nhận xét/giải thích của giảng viên khi chấm câu này — học sinh xem được ở
-    // trang kết quả. Chỉ áp dụng cho câu chấm tay (text/video/audio).
+    // trang kết quả. Chỉ áp dụng cho câu chấm tay (text/video/audio/image).
     teacherNote: { type: String, default: '' },
   }],
   score: { type: Number, default: 0 },
