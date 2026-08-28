@@ -1,6 +1,7 @@
 const Material = require('../models/Material');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { deleteManyFromBlob, staleMediaPaths } = require('../utils/uploadHandlers');
 
 // Public — active only, sorted by order
 exports.getAll = async (req, res) => {
@@ -21,8 +22,13 @@ exports.create = async (req, res) => {
 };
 
 exports.update = async (req, res, next) => {
+  const before = await Material.findById(req.params.id).select('src');
   const material = await Material.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
   if (!material) return next(new AppError('Không tìm thấy tài liệu', 404));
+  // remove() chỉ soft-delete (isActive:false) nên KHÔNG dọn ảnh ở đó.
+  if (req.body.src !== undefined) {
+    deleteManyFromBlob(staleMediaPaths(before?.src, req.body.src)).catch(() => {});
+  }
   success(res, material, 'Cập nhật thành công');
 };
 

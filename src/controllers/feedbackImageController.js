@@ -1,6 +1,7 @@
 const FeedbackImage = require('../models/FeedbackImage');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { deleteManyFromBlob, staleMediaPaths } = require('../utils/uploadHandlers');
 
 const MAX_IMAGES = 30;
 
@@ -39,18 +40,21 @@ exports.update = async (req, res, next) => {
   const image = normalizeImage(req.body.image);
   if (!image.vi) return next(new AppError('Vui lòng chọn ảnh phản hồi', 400));
   if (!name?.trim() || !course?.trim()) return next(new AppError('Vui lòng nhập đủ tên học viên và khoá học', 400));
+  const before = await FeedbackImage.findById(req.params.id).select('image');
   const img = await FeedbackImage.findByIdAndUpdate(
     req.params.id,
     { image, name: name.trim(), course: course.trim() },
     { new: true, runValidators: true }
   );
   if (!img) return next(new AppError('Không tìm thấy ảnh', 404));
+  deleteManyFromBlob(staleMediaPaths(before?.image, image)).catch(() => {});
   success(res, img, 'Cập nhật thành công');
 };
 
 exports.remove = async (req, res, next) => {
   const img = await FeedbackImage.findByIdAndDelete(req.params.id);
   if (!img) return next(new AppError('Không tìm thấy ảnh', 404));
+  deleteManyFromBlob(img.image).catch(() => {});
   success(res, null, 'Xóa thành công');
 };
 

@@ -5,6 +5,7 @@ const HomeworkAssignment = require('../models/HomeworkAssignment');
 const HomeworkSubmission = require('../models/HomeworkSubmission');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { deleteManyFromBlob, staleMediaPaths } = require('../utils/uploadHandlers');
 
 const myTeacherId = (req) => req.teacherAccount.teacherId._id;
 
@@ -46,6 +47,7 @@ exports.createQuestion = async (req, res, next) => {
 exports.updateQuestion = async (req, res, next) => {
   const q = await HomeworkQuestion.findOne({ _id: req.params.id, teacherId: myTeacherId(req) });
   if (!q) return next(new AppError('Không tìm thấy câu hỏi', 404));
+  const before = { image: q.image, audioUrl: q.audioUrl };
   const { question, youtubeUrl, image, audioUrl, answerTypes, options, answerIndices, points } = req.body;
   if (answerTypes !== undefined && (!Array.isArray(answerTypes) || answerTypes.length === 0 || !answerTypes.every(a => VALID_ANSWER_TYPES.includes(a)))) {
     return next(new AppError('Vui lòng chọn ít nhất 1 dạng bài học sinh phải nộp', 400));
@@ -59,12 +61,14 @@ exports.updateQuestion = async (req, res, next) => {
   if (answerIndices !== undefined) q.answerIndices = answerIndices;
   if (points !== undefined) q.points = points;
   await q.save();
+  deleteManyFromBlob(staleMediaPaths(before.image, q.image), staleMediaPaths(before.audioUrl, q.audioUrl)).catch(() => {});
   success(res, q, 'Cập nhật thành công');
 };
 
 exports.deleteQuestion = async (req, res, next) => {
   const q = await HomeworkQuestion.findOneAndDelete({ _id: req.params.id, teacherId: myTeacherId(req) });
   if (!q) return next(new AppError('Không tìm thấy câu hỏi', 404));
+  deleteManyFromBlob(q.image, q.audioUrl).catch(() => {});
   success(res, null, 'Xoá thành công');
 };
 
@@ -208,6 +212,8 @@ exports.updateAssignment = async (req, res, next) => {
 exports.deleteAssignment = async (req, res, next) => {
   const a = await HomeworkAssignment.findOneAndDelete({ _id: req.params.id, teacherId: myTeacherId(req) });
   if (!a) return next(new AppError('Không tìm thấy bài giao', 404));
+  const subs = await HomeworkSubmission.find({ assignmentId: a._id }).select('answers');
+  deleteManyFromBlob(...subs.flatMap(s => s.answers.map(ans => [ans.imageUrl, ans.audioUrl, ans.videoUrl]))).catch(() => {});
   await HomeworkSubmission.deleteMany({ assignmentId: a._id });
   success(res, null, 'Xoá thành công');
 };

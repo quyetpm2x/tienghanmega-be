@@ -16,6 +16,13 @@ const errorHandler = (err, req, res, next) => {
     message = `${label} "${value}" đã được sử dụng, vui lòng chọn giá trị khác`;
   }
 
+  // Lỗi từ multer (upload file) — mặc định statusCode 500 + message tiếng Anh
+  // ("File too large"...), dịch lại cho rõ và trả đúng 400.
+  if (err.name === 'MulterError') {
+    statusCode = 400;
+    if (err.code === 'LIMIT_FILE_SIZE') message = 'File vượt quá dung lượng cho phép';
+  }
+
   res.status(statusCode).json({
     success: false,
     message,

@@ -2,6 +2,7 @@ const Teacher = require('../models/Teacher');
 const { generateUniqueReferralCode } = require('../utils/referral');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { deleteManyFromBlob, staleMediaPaths } = require('../utils/uploadHandlers');
 
 // totalPaidSalary/phone/adminNote are HR-only — never exposed on the
 // public (unauthenticated) teacher endpoints, only when req.admin is set.
@@ -48,8 +49,14 @@ exports.update = async (req, res, next) => {
   // referralCode chỉ được hệ thống tự set (qua create/generateReferralCode),
   // không cho client ghi đè trực tiếp qua form sửa thông tin thông thường.
   const { referralCode, ...rest } = req.body;
+  const before = await Teacher.findById(req.params.id).select('src');
   const teacher = await Teacher.findByIdAndUpdate(req.params.id, rest, { new: true, runValidators: true });
   if (!teacher) return next(new AppError('Không tìm thấy giảng viên', 404));
+  // Ảnh cũ (src) bị thay/xoá — dọn khỏi Blob. remove() chỉ soft-delete
+  // (isActive:false), bản ghi + ảnh vẫn còn dùng nên KHÔNG dọn ở đó.
+  if (rest.src !== undefined) {
+    deleteManyFromBlob(staleMediaPaths(before?.src, rest.src)).catch(() => {});
+  }
   success(res, teacher, 'Cập nhật thành công');
 };
 

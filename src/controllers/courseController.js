@@ -1,6 +1,7 @@
 const Course = require('../models/Course');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { deleteManyFromBlob, staleMediaPaths } = require('../utils/uploadHandlers');
 
 exports.getAll = async (req, res) => {
   const { cat } = req.query;
@@ -32,8 +33,15 @@ exports.create = async (req, res) => {
 };
 
 exports.update = async (req, res, next) => {
+  const before = await Course.findOne({ slug: Number(req.params.id) }).select('image');
   const course = await Course.findOneAndUpdate({ slug: Number(req.params.id) }, req.body, { new: true, runValidators: true });
   if (!course) return next(new AppError('Không tìm thấy khóa học', 404));
+  // Ảnh cũ bị thay bằng ảnh mới (hoặc bị xoá trắng) — dọn khỏi Blob, tránh rác
+  // tích luỹ. Course.remove chỉ soft-delete (isActive:false) nên KHÔNG xoá ảnh
+  // ở exports.remove — bản ghi còn tồn tại, ảnh vẫn đang được tham chiếu.
+  if (req.body.image !== undefined) {
+    deleteManyFromBlob(staleMediaPaths(before?.image, req.body.image)).catch(() => {});
+  }
   success(res, course, 'Cập nhật thành công');
 };
 

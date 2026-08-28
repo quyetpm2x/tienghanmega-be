@@ -1,6 +1,7 @@
 const CommunityLink = require('../models/CommunityLink');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { deleteManyFromBlob, staleMediaPaths } = require('../utils/uploadHandlers');
 
 const MAX_LINKS = 10;
 
@@ -37,18 +38,21 @@ exports.update = async (req, res, next) => {
   const { linkUrl } = req.body;
   const imageUrl = normalizeImageUrl(req.body.imageUrl);
   if (!imageUrl.vi || !linkUrl) return next(new AppError('Vui lòng nhập đủ ảnh và link', 400));
+  const before = await CommunityLink.findById(req.params.id).select('imageUrl');
   const link = await CommunityLink.findByIdAndUpdate(
     req.params.id,
     { imageUrl, linkUrl },
     { new: true, runValidators: true }
   );
   if (!link) return next(new AppError('Không tìm thấy ảnh', 404));
+  deleteManyFromBlob(staleMediaPaths(before?.imageUrl, imageUrl)).catch(() => {});
   success(res, link, 'Cập nhật thành công');
 };
 
 exports.remove = async (req, res, next) => {
   const link = await CommunityLink.findByIdAndDelete(req.params.id);
   if (!link) return next(new AppError('Không tìm thấy ảnh', 404));
+  deleteManyFromBlob(link.imageUrl).catch(() => {});
   success(res, null, 'Đã xoá ảnh');
 };
 

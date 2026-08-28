@@ -8,6 +8,7 @@ const { sameIndexSet, resolveGrading } = require('../utils/testScoring');
 const { effectiveStatus } = require('../utils/testSessionStatus');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { deleteManyFromBlob } = require('../utils/uploadHandlers');
 
 // Admin-only: xem tổng quan mọi phiên kiểm tra + kết quả thi trên toàn hệ
 // thống (không giới hạn theo lớp của 1 giáo viên như teacherTestController).
@@ -115,6 +116,8 @@ exports.updateSession = async (req, res, next) => {
 exports.deleteSession = async (req, res, next) => {
   const session = await TestSession.findById(req.params.id);
   if (!session) return next(new AppError('Không tìm thấy phiên kiểm tra', 404));
+  const attempts = await TestAttempt.find({ sessionId: session._id }).select('answers');
+  deleteManyFromBlob(...attempts.flatMap(a => a.answers.map(ans => [ans.imageAnswer, ans.audioAnswer]))).catch(() => {});
   await TestAttempt.deleteMany({ sessionId: session._id });
   await session.deleteOne();
   success(res, null, 'Đã xoá phiên kiểm tra');

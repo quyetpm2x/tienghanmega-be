@@ -3,6 +3,7 @@ const TestAttempt = require('../models/TestAttempt');
 const { sameIndexSet } = require('../utils/testScoring');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { deleteManyFromBlob, staleMediaPaths } = require('../utils/uploadHandlers');
 
 // Admin-only: quản lý ngân hàng câu hỏi cho tính năng Bài kiểm tra.
 
@@ -91,6 +92,7 @@ exports.update = async (req, res, next) => {
   const isEssay = skill === 'writing';
   const doc = await TestQuestion.findById(req.params.id);
   if (!doc) return next(new AppError('Không tìm thấy câu hỏi', 404));
+  const before = { image: doc.image, audioUrl: doc.audioUrl };
   // Cố tình dùng findById + .save() thay vì findByIdAndUpdate({ runValidators: true }):
   // các custom validator (options/answerIndices) đọc this.questionType, nhưng với
   // update-validators "this" trỏ vào query chứ không phải document, khiến check
@@ -104,6 +106,7 @@ exports.update = async (req, res, next) => {
     points: points || 1,
   });
   await doc.save();
+  deleteManyFromBlob(staleMediaPaths(before.image, doc.image), staleMediaPaths(before.audioUrl, doc.audioUrl)).catch(() => {});
   success(res, doc, 'Cập nhật thành công');
 };
 
@@ -113,5 +116,6 @@ exports.remove = async (req, res, next) => {
   if (inUse) return next(new AppError('Câu hỏi đang được dùng trong ít nhất 1 đề kiểm tra, không thể xoá', 400));
   const doc = await TestQuestion.findByIdAndDelete(req.params.id);
   if (!doc) return next(new AppError('Không tìm thấy câu hỏi', 404));
+  deleteManyFromBlob(doc.image, doc.audioUrl).catch(() => {});
   success(res, null, 'Xoá thành công');
 };
