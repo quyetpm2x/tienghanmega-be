@@ -4,6 +4,14 @@ const HomeworkSubmission = require('../models/HomeworkSubmission');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
+// Ảnh bài làm của 1 câu — bài nộp CŨ chỉ có 1 ảnh ở `imageUrl`, bài mới lưu mảng
+// `imageUrls`. Luôn đọc qua hàm này để bài cũ vẫn xem lại được bình thường.
+function answerImages(a) {
+  if (!a) return [];
+  if (a.imageUrls && a.imageUrls.length) return [...a.imageUrls];
+  return a.imageUrl ? [a.imageUrl] : [];
+}
+
 // Đệm trễ cho phép khi nộp bài — bù thời gian request đi trên mạng (giống hệ Test).
 const SUBMIT_GRACE_MS = 20 * 1000;
 
@@ -76,7 +84,7 @@ exports.startAssignment = async (req, res, next) => {
         answeredAs: a?.answeredAs || null,
         // Tiền tố "answer" để phân biệt với audioUrl ở trên (âm thanh của ĐỀ BÀI, không
         // phải bài học sinh đã nộp/lưu tạm).
-        selectedIndices: a?.selectedIndices || [], text: a?.text || '', answerVideoUrl: a?.videoUrl || '', answerAudioUrl: a?.audioUrl || '', answerImageUrl: a?.imageUrl || '',
+        selectedIndices: a?.selectedIndices || [], text: a?.text || '', answerVideoUrl: a?.videoUrl || '', answerAudioUrl: a?.audioUrl || '', answerImageUrls: answerImages(a),
       };
     }),
   });
@@ -96,7 +104,7 @@ exports.saveProgress = async (req, res, next) => {
     if (incoming.text !== undefined) obj.text = incoming.text;
     if (incoming.videoUrl !== undefined) obj.videoUrl = incoming.videoUrl;
     if (incoming.audioUrl !== undefined) obj.audioUrl = incoming.audioUrl;
-    if (incoming.imageUrl !== undefined) obj.imageUrl = incoming.imageUrl;
+    if (incoming.imageUrls !== undefined) obj.imageUrls = incoming.imageUrls;
     return obj;
   });
   await sub.save();
@@ -142,7 +150,7 @@ exports.submitAssignment = async (req, res, next) => {
         if (incoming.text !== undefined) obj.text = incoming.text;
         if (incoming.videoUrl !== undefined) obj.videoUrl = incoming.videoUrl;
         if (incoming.audioUrl !== undefined) obj.audioUrl = incoming.audioUrl;
-        if (incoming.imageUrl !== undefined) obj.imageUrl = incoming.imageUrl;
+        if (incoming.imageUrls !== undefined) obj.imageUrls = incoming.imageUrls;
       }
       // manualScore giữ null — chờ giảng viên chấm tay.
     }
@@ -207,7 +215,7 @@ exports.getSubmission = async (req, res, next) => {
       answeredAs: a.answeredAs,
       options: a.questionId.options,
       answerIndices: revealAnswers ? a.questionId.answerIndices : undefined,
-      selectedIndices: a.selectedIndices, text: a.text, answerVideoUrl: a.videoUrl, answerAudioUrl: a.audioUrl, answerImageUrl: a.imageUrl,
+      selectedIndices: a.selectedIndices, text: a.text, answerVideoUrl: a.videoUrl, answerAudioUrl: a.audioUrl, answerImageUrls: answerImages(a),
       points: a.points, manualScore: a.manualScore, teacherNote: a.teacherNote,
     })),
   });

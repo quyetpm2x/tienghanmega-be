@@ -1,6 +1,7 @@
 const multer = require('multer');
 const path = require('path');
 const { put, del } = require('@vercel/blob');
+const sharp = require('sharp');
 const AppError = require('./AppError');
 
 // Multer instances dùng chung cho mọi route upload ảnh/audio trong hệ thống —
@@ -10,13 +11,25 @@ const AppError = require('./AppError');
 // bài làm học sinh, ảnh admin: khoá học/giáo viên/banner...) vì đều dùng chung
 // đúng 1 instance multer này.
 const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+const imageFileFilter = (_req, file, cb) => {
+  const ok = /^image\/(jpeg|jpg|png|gif|webp|svg\+xml)$/.test(file.mimetype);
+  ok ? cb(null, true) : cb(new AppError('Chỉ chấp nhận file ảnh (jpg, png, gif, webp, svg)', 400));
+};
 const imageUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: IMAGE_MAX_BYTES },
-  fileFilter: (_req, file, cb) => {
-    const ok = /^image\/(jpeg|jpg|png|gif|webp|svg\+xml)$/.test(file.mimetype);
-    ok ? cb(null, true) : cb(new AppError('Chỉ chấp nhận file ảnh (jpg, png, gif, webp, svg)', 400));
-  },
+  fileFilter: imageFileFilter,
+});
+
+// Ảnh BÀI LÀM BTVN của học sinh — instance RIÊNG (không dùng chung imageUpload ở
+// trên) vì hạn mức khác: 5MB/ảnh và cho nộp NHIỀU ảnh cùng lúc cho 1 câu. Tách
+// riêng để việc nới hạn mức ở đây không vô tình nới cho mọi route upload ảnh khác.
+const HOMEWORK_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const HOMEWORK_IMAGE_MAX_COUNT = 10;
+const homeworkImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: HOMEWORK_IMAGE_MAX_BYTES, files: HOMEWORK_IMAGE_MAX_COUNT },
+  fileFilter: imageFileFilter,
 });
 
 const audioUpload = multer({
@@ -42,15 +55,54 @@ const videoUpload = multer({
 // tường minh, nếu không put() sẽ trỏ nhầm store ("This store does not exist").
 const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN_PRODUCT || process.env.BLOB_READ_WRITE_TOKEN;
 
+// Chỉ nén ảnh RASTER. Cố tình BỎ QUA:
+//  - image/svg+xml: là vector, rasterize ra là mất khả năng phóng to vô hạn
+//  - image/gif: có thể là ảnh động, sharp mặc định chỉ giữ frame đầu
+// Audio/video đi qua uploadToBlob cũng không khớp regex nên không bị đụng tới.
+const COMPRESSIBLE_IMAGE = /^image\/(jpeg|jpg|png|webp)$/;
+// 1600px là dư cho mọi vị trí hiển thị trên web (kể cả màn Retina) — ảnh gốc
+// admin upload thường là ảnh thiết kế khổ lớn 3000-5000px, nặng gấp hàng chục lần
+// mà hiển thị ra không đẹp hơn chút nào.
+const IMAGE_MAX_DIMENSION = 1600;
+const WEBP_QUALITY = 82;
+
+// Trả về buffer WebP đã nén, hoặc null nếu KHÔNG nên nén (không phải ảnh raster,
+// nén xong lại to hơn, hoặc sharp lỗi). null = giữ nguyên file gốc — nén là tối
+// ưu hoá, không bao giờ được phép làm hỏng thao tác upload.
+async function compressImage(file) {
+  if (!COMPRESSIBLE_IMAGE.test(file.mimetype)) return null;
+  try {
+    const buffer = await sharp(file.buffer)
+      // .rotate() không tham số = xoay theo EXIF orientation. Phải gọi TRƯỚC
+      // resize, nếu không ảnh chụp dọc từ điện thoại (ảnh bài làm học sinh) sẽ
+      // bị resize theo chiều sai rồi mới xoay.
+      .rotate()
+      .resize({ width: IMAGE_MAX_DIMENSION, height: IMAGE_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: WEBP_QUALITY })
+      .toBuffer();
+    if (buffer.length >= file.buffer.length) return null;
+    return buffer;
+  } catch (err) {
+    console.error('[compressImage] nén thất bại, dùng file gốc:', err.message);
+    return null;
+  }
+}
+
 // Đẩy file (đã nằm trong RAM qua multer) lên Vercel Blob, trả về path tương
 // đối /cdn/... (không phải URL vercel-storage.com trực tiếp) — FE có rewrite
 // /cdn/:path* proxy sang Blob storage (xem next.config.js).
 async function uploadToBlob(file, folder, defaultExt = '') {
-  const ext = path.extname(file.originalname).toLowerCase() || defaultExt;
+  const compressed = await compressImage(file);
+  const buffer = compressed || file.buffer;
+  // Nén xong thì file LUÔN là webp — đuôi và contentType phải đổi theo, nếu
+  // không Blob sẽ trả về ảnh webp kèm header "image/png" và trình duyệt Safari
+  // từ chối hiển thị.
+  const ext = compressed ? '.webp' : (path.extname(file.originalname).toLowerCase() || defaultExt);
+  const contentType = compressed ? 'image/webp' : file.mimetype;
   const name = `${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`;
-  await put(`${folder}/${name}`, file.buffer, {
+  await put(`${folder}/${name}`, buffer, {
     access: 'public',
-    contentType: file.mimetype,
+    contentType,
     token: BLOB_TOKEN,
   });
   return `/cdn/${folder}/${name}`;
@@ -96,4 +148,4 @@ function staleMediaPaths(oldValue, newValue) {
   return mediaPaths(oldValue).filter(p => !kept.has(p));
 }
 
-module.exports = { imageUpload, audioUpload, videoUpload, uploadToBlob, deleteFromBlob, deleteManyFromBlob, mediaPaths, staleMediaPaths };
+module.exports = { imageUpload, homeworkImageUpload, HOMEWORK_IMAGE_MAX_BYTES, HOMEWORK_IMAGE_MAX_COUNT, audioUpload, videoUpload, uploadToBlob, deleteFromBlob, deleteManyFromBlob, mediaPaths, staleMediaPaths };

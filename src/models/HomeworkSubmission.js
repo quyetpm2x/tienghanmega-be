@@ -17,7 +17,10 @@ const homeworkSubmissionSchema = new mongoose.Schema({
     text: { type: String, default: '' },                 // text
     videoUrl: { type: String, default: '' },              // video
     audioUrl: { type: String, default: '' },              // audio (giữ lại cho bài nộp cũ)
-    imageUrl: { type: String, default: '' },              // image
+    // image — học sinh được nộp NHIỀU ảnh cho 1 câu. `imageUrl` (1 ảnh) là field
+    // CŨ, chỉ còn để đọc lại các bài đã nộp từ trước; bài mới luôn ghi vào imageUrls.
+    imageUrl: { type: String, default: '' },
+    imageUrls: { type: [String], default: [] },
     points: { type: Number, default: 0 },                 // snapshot điểm TỐI ĐA của câu
     // Điểm THỰC NHẬN cuối cùng của câu — trắc nghiệm được set tự động ngay lúc nộp
     // bài (0 hoặc points), text/video/audio/image giữ null cho tới khi giảng viên chấm tay.

@@ -213,7 +213,7 @@ exports.deleteAssignment = async (req, res, next) => {
   const a = await HomeworkAssignment.findOneAndDelete({ _id: req.params.id, teacherId: myTeacherId(req) });
   if (!a) return next(new AppError('Không tìm thấy bài giao', 404));
   const subs = await HomeworkSubmission.find({ assignmentId: a._id }).select('answers');
-  deleteManyFromBlob(...subs.flatMap(s => s.answers.map(ans => [ans.imageUrl, ans.audioUrl, ans.videoUrl]))).catch(() => {});
+  deleteManyFromBlob(...subs.flatMap(s => s.answers.map(ans => [ans.imageUrl, ...(ans.imageUrls || []), ans.audioUrl, ans.videoUrl]))).catch(() => {});
   await HomeworkSubmission.deleteMany({ assignmentId: a._id });
   success(res, null, 'Xoá thành công');
 };
