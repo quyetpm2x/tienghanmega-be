@@ -80,6 +80,22 @@ exports.create = async (req, res, next) => {
   if (refErr) return next(refErr);
   await maybeCreateCommission(student); // phòng trường hợp tạo thẳng với status active + đã đóng đủ + có người giới thiệu
   await student.save();
+  // Form thêm học sinh có ô "đã đóng" nhập tay. Nếu chỉ ghi vào student.amount thì
+  // khoản tiền đó KHÔNG có ngày đóng, mà doanh thu nay gom theo ngày đóng — tiền sẽ
+  // thành "mồ côi" và phải tính ước lượng theo ngày khai giảng. Sinh luôn bản ghi
+  // Payment tương ứng (ngày đóng = ngày khai giảng) để mọi khoản thu MỚI đều có ngày.
+  if (student.amount > 0) {
+    await Payment.create({
+      studentId:      student._id,
+      studentName:    student.name,
+      classId:        student.classId,
+      className:      student.className,
+      courseCategory: getCourseCategory(student.level),
+      amount:         student.amount,
+      paidAt:         student.startDate ? new Date(student.startDate) : new Date(),
+      note:           'Ghi nhận khi thêm học viên',
+    });
+  }
   success(res, student, 'Thêm học viên thành công', 201);
 };
 
