@@ -4,6 +4,8 @@
 // lộ ratePerSession/dữ liệu giáo viên khác qua network). Phải giữ đúng cùng công
 // thức "kỳ lương" (payPeriodLabel/Bounds) với bản admin để 2 bên luôn khớp số.
 
+const { belongsToClass } = require('./classLink');
+
 const DEFAULT_PAY_PERIOD_START_DAY = 10;
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -69,10 +71,11 @@ function buildTeacherSessions(teacherId, classes, overrides, todayStr) {
     dates.forEach((date) => {
       const inSegment = segments.some((a) => date >= a.fromDate && (!a.toDate || date <= a.toDate));
       if (!inSegment) return;
-      const override = overrides.find((s) => s.className === c.name && s.date === date &&
+      // Ngoại lệ nối với lớp theo classId (bản ghi cũ chưa có classId thì theo tên).
+      const override = overrides.find((s) => belongsToClass(s, c) && s.date === date &&
         (s.status === 'absent' || s.status === 'rescheduled' || s.status === 'not-taught' || s.status === 'substituted'));
-      if (override) { result.push({ date, className: c.name, status: override.status }); return; }
-      result.push({ date, className: c.name, status: 'taught' });
+      if (override) { result.push({ date, classId: c._id, className: c.name, status: override.status }); return; }
+      result.push({ date, classId: c._id, className: c.name, status: 'taught' });
     });
   });
 
@@ -80,7 +83,8 @@ function buildTeacherSessions(teacherId, classes, overrides, todayStr) {
   // đang phụ trách, cộng thẳng thành buổi "đã dạy" theo đúng lớp+ngày của buổi gốc.
   overrides.forEach((s) => {
     if (s.status === 'substituted' && String(s.substituteTeacherId || '') === String(teacherId) && s.date <= todayStr) {
-      result.push({ date: s.date, className: s.className, status: 'taught', substituteForTeacherName: s.teacherName, substituteRate: s.substituteRate ?? null });
+      const cls = classes.find((c) => belongsToClass(s, c));
+      result.push({ date: s.date, classId: cls ? cls._id : s.classId || null, className: cls ? cls.name : s.className, status: 'taught', substituteForTeacherName: s.teacherName, substituteRate: s.substituteRate ?? null });
     }
   });
 
@@ -95,7 +99,7 @@ function buildTeacherLedger({ teacherId, classes, overrides, bonuses, commission
   buildTeacherSessions(teacherId, classes, overrides, todayStr)
     .filter((s) => s.status === 'taught' || s.status === 'rescheduled')
     .forEach((s) => {
-      const cls = classes.find((c) => c.name === s.className);
+      const cls = s.classId ? classes.find((c) => String(c._id) === String(s.classId)) : classes.find((c) => c.name === s.className);
       const amount = s.substituteRate ?? cls?.ratePerSession;
       if (!cls || amount == null) return;
       items.push({ className: s.className, date: s.date, amount, kind: 'session', substituteForTeacherName: s.substituteForTeacherName, substituteRate: s.substituteRate ?? null });

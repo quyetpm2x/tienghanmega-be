@@ -1,4 +1,4 @@
-const Student = require('../models/Student');
+const { activeClassIdsOfStudent } = require('../utils/enrollment');
 const Test = require('../models/Test');
 const TestQuestion = require('../models/TestQuestion');
 const TestSession = require('../models/TestSession');
@@ -10,7 +10,7 @@ const AppError = require('../utils/AppError');
 
 // Everything in this controller derives its scope from req.studentAccount
 // (set by protectStudent) — a student only ever sees/writes their own attempts,
-// scoped to the class they currently belong to (Student.classId).
+// scoped to the classes they are actively enrolled in (Enrollment).
 
 // Đệm trễ cho phép khi nộp bài — bù thời gian request đi trên mạng, không tính
 // là nộp muộn nếu lệch trong khoảng này.
@@ -25,22 +25,23 @@ function shuffle(arr) {
   return a;
 }
 
-async function myClassId(req) {
-  const student = await Student.findById(req.studentAccount.studentId._id).select('classId');
-  return student?.classId || null;
+// Các lớp học sinh đang học — một học sinh có thể học nhiều lớp cùng lúc.
+function myClassIds(req) {
+  return activeClassIdsOfStudent(req.studentAccount.studentId._id);
 }
 
 // Danh sách phiên kiểm tra của lớp học sinh đang học, kèm trạng thái bài làm
 // của chính học sinh đó (nếu đã bắt đầu/nộp bài).
 exports.getMySessions = async (req, res) => {
-  const classId = await myClassId(req);
-  if (!classId) return success(res, []);
+  const classIds = await myClassIds(req);
+  if (!classIds.length) return success(res, []);
   const studentId = req.studentAccount.studentId._id;
 
   // Bỏ qua phiên 'draft' — admin mới tạo, giáo viên chưa đặt giờ nên học sinh
   // chưa cần thấy (chưa thể bắt đầu làm được).
-  const sessions = await TestSession.find({ classId, status: { $ne: 'draft' } })
+  const sessions = await TestSession.find({ classId: { $in: classIds }, status: { $ne: 'draft' } })
     .populate('activeTestIds', 'title level duration')
+    .populate('classId', 'name')
     .sort({ createdAt: -1 });
 
   // Có thể có nhiều attempt/session (mỗi lần làm lại là 1 document). myAttempt
@@ -76,6 +77,7 @@ exports.getMySessions = async (req, res) => {
     return {
       _id: s._id,
       title: s.title,
+      className: s.classId?.name || '',
       activeTestIds: s.activeTestIds,
       openAt: s.openAt,
       endAt: s.endAt,
@@ -105,10 +107,10 @@ exports.getMySessions = async (req, res) => {
 // Bắt đầu (hoặc tiếp tục) làm bài — mỗi học sinh được random 1 đề riêng từ
 // danh sách đề giáo viên đã kích hoạt cho phiên này. Không trả về đáp án đúng.
 exports.startAttempt = async (req, res, next) => {
-  const classId = await myClassId(req);
+  const classIds = await myClassIds(req);
   const studentId = req.studentAccount.studentId._id;
   const session = await TestSession.findById(req.params.sessionId).populate('activeTestIds');
-  if (!session || !classId || String(session.classId) !== String(classId)) {
+  if (!session || !classIds.some(c => String(c) === String(session.classId))) {
     return next(new AppError('Không tìm thấy phiên kiểm tra', 404));
   }
   if (effectiveStatus(session) !== 'open') {

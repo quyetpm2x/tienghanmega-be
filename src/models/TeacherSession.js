@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const teacherSessionSchema = new mongoose.Schema({
   teacherName: { type: String, required: true },
   date: { type: String, required: true },
+  // Lớp gốc. className chỉ là bản sao để hiển thị (đồng bộ khi đổi tên lớp).
+  classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', default: null, index: true },
   className: { type: String, required: true },
   status: { type: String, enum: ['taught', 'not-taught', 'rescheduled', 'absent', 'substituted'], default: 'not-taught' },
   note: { type: String, default: '' },

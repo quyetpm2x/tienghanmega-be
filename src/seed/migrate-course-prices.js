@@ -4,6 +4,11 @@
  *
  * Run: node src/seed/migrate-course-prices.js
  */
+// ⛔ NGỪNG DÙNG từ 2026-09-15: script này từng tự điền học phí ĐOÁN theo tên khoá vào
+// Student.coursePrice. Học phí nay nằm ở EnrollmentPackage/Enrollment; chạy lại sẽ làm
+// sai dữ liệu đối chiếu của lần chuyển đổi.
+console.error('⛔ src/seed/migrate-course-prices.js đã ngừng dùng (mô hình ghi danh nhiều khoá). Không chạy.');
+process.exit(1);
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 const connectDB = require('../config/database');
 const Student   = require('../models/Student');

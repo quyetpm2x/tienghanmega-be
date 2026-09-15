@@ -1,8 +1,12 @@
+const mongoose = require('mongoose');
 const Class = require('../models/Class');
-const Student = require('../models/Student');
+const Enrollment = require('../models/Enrollment');
 const Teacher = require('../models/Teacher');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { activeStudentCountsByClass } = require('../utils/enrollment');
+const { categoryOf } = require('../utils/courseCategory');
+const { renameClassEverywhere } = require('../services/classRenameService');
 
 const MAX_HOMEPAGE_CLASSES = 5;
 
@@ -55,15 +59,11 @@ function mergeAdjacentAssignments(sortedAsc) {
   return merged;
 }
 
-// Class.enrolled is a stored field with no code path that keeps it in sync — attach
-// the real Student count instead, so every consumer (admin list, edit form, public
-// banner) sees the same accurate number.
-async function withLiveEnrolled(classNames) {
-  const counts = await Student.aggregate([
-    { $match: { className: { $in: classNames } } },
-    { $group: { _id: '$className', count: { $sum: 1 } } },
-  ]);
-  return Object.fromEntries(counts.map(c => [c._id, c.count]));
+// Class.enrolled là trường lưu tay không ai cập nhật — trả sĩ số THẬT: số học sinh có
+// ghi danh đang học ở lớp (đếm người, bỏ học sinh đã nghỉ; trước đây đếm cả người nghỉ
+// và join bằng tên lớp).
+async function withLiveEnrolled(classes) {
+  return activeStudentCountsByClass(classes.map(c => c._id));
 }
 
 exports.getAll = async (req, res) => {
@@ -88,15 +88,15 @@ exports.getAll = async (req, res) => {
     });
   }
 
-  const enrolledMap = await withLiveEnrolled(classes.map(c => c.name));
-  success(res, classes.map(c => ({ ...c.toObject(), enrolled: enrolledMap[c.name] || 0 })));
+  const enrolledMap = await withLiveEnrolled(classes);
+  success(res, classes.map(c => ({ ...c.toObject(), enrolled: enrolledMap[String(c._id)] || 0 })));
 };
 
 exports.getOne = async (req, res, next) => {
   const cls = await Class.findById(req.params.id);
   if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
-  const enrolledMap = await withLiveEnrolled([cls.name]);
-  success(res, { ...cls.toObject(), enrolled: enrolledMap[cls.name] || 0 });
+  const enrolledMap = await withLiveEnrolled([cls]);
+  success(res, { ...cls.toObject(), enrolled: enrolledMap[String(cls._id)] || 0 });
 };
 
 exports.create = async (req, res, next) => {
@@ -113,13 +113,11 @@ exports.create = async (req, res, next) => {
 };
 
 exports.update = async (req, res, next) => {
-  if (req.body.showOnHomepage) {
-    const existing = await Class.findById(req.params.id);
-    if (!existing) return next(new AppError('Không tìm thấy lớp học', 404));
-    if (!existing.showOnHomepage) {
-      const count = await Class.countDocuments({ showOnHomepage: true, _id: { $ne: req.params.id } });
-      if (count >= MAX_HOMEPAGE_CLASSES) return next(new AppError('Đã đạt tối đa 5 lớp hiển thị banner homepage', 400));
-    }
+  const existing = await Class.findById(req.params.id);
+  if (!existing) return next(new AppError('Không tìm thấy lớp học', 404));
+  if (req.body.showOnHomepage && !existing.showOnHomepage) {
+    const count = await Class.countDocuments({ showOnHomepage: true, _id: { $ne: req.params.id } });
+    if (count >= MAX_HOMEPAGE_CLASSES) return next(new AppError('Đã đạt tối đa 5 lớp hiển thị banner homepage', 400));
   }
   // Đổi giáo viên phụ trách KHÔNG đi qua đây nữa — phải qua transferTeacher (yêu cầu
   // chọn ngày hiệu lực rõ ràng), tránh 2 đường ghi teacherAssignments khác hành vi
@@ -129,15 +127,37 @@ exports.update = async (req, res, next) => {
   delete body.teacher;
   delete body.teacherId;
   delete body.teacherAssignments;
-  const cls = await Class.findByIdAndUpdate(req.params.id, body, { new: true, runValidators: true });
-  if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
-  // Student.level là bản sao chụp course của lớp tại thời điểm thêm/chuyển lớp — nếu
-  // admin đổi khoá học gắn với lớp sau đó, học sinh đang học lớp này sẽ bị lệch dữ liệu
-  // (hiển thị sai, tra giá học phí sai...) nếu không đồng bộ lại ngay tại đây.
-  if ('course' in body) {
-    await Student.updateMany({ classId: cls._id }, { $set: { level: cls.course } });
+
+  const oldName = existing.name;
+  if ('name' in body) {
+    body.name = String(body.name || '').trim();
+    if (!body.name) return next(new AppError('Vui lòng nhập tên lớp', 400));
   }
-  success(res, cls, 'Cập nhật thành công');
+  const renamed = 'name' in body && body.name !== oldName;
+  if (renamed && await Class.exists({ name: body.name, _id: { $ne: existing._id } })) {
+    return next(new AppError(`Đã có lớp tên "${body.name}"`, 400));
+  }
+
+  // Lớp là GỐC: cập nhật lớp và mọi nơi nối theo tên lớp / khoá học trong MỘT transaction.
+  const { cls, renameSync } = await mongoose.connection.transaction(async session => {
+    const updated = await Class.findByIdAndUpdate(existing._id, body, { new: true, runValidators: true, session });
+    const sync = renamed
+      ? await renameClassEverywhere({ classId: updated._id, oldName, newName: updated.name, session })
+      : null;
+    // Khoá học của lớp đổi → ghi danh đổi theo (giá ghi danh KHÔNG đổi).
+    if ('course' in body) {
+      await Enrollment.updateMany(
+        { classId: updated._id },
+        { $set: { courseTitle: updated.course || '', courseCategory: categoryOf(updated.course) } },
+      ).session(session);
+    }
+    return { cls: updated, renameSync: sync };
+  });
+
+  const message = renameSync
+    ? `Đã đổi tên lớp và cập nhật theo: ${renameSync.enrollments} ghi danh, ${renameSync.attendances} buổi điểm danh, ${renameSync.teacherSessions} buổi dạy, ${renameSync.teacherBonuses} thưởng/phạt`
+    : 'Cập nhật thành công';
+  success(res, { ...cls.toObject(), renameSync }, message);
 };
 
 // Đổi/chèn giáo viên phụ trách 1 lớp tại 1 ngày hiệu lực bất kỳ — không bắt buộc phải
@@ -284,6 +304,9 @@ exports.correctAssignmentTeacher = async (req, res, next) => {
 };
 
 exports.remove = async (req, res, next) => {
+  // Xoá lớp còn học sinh đang học sẽ để lại ghi danh trỏ vào lớp không tồn tại.
+  const hasActive = await Enrollment.exists({ classId: req.params.id, status: 'active' });
+  if (hasActive) return next(new AppError('Lớp còn học sinh đang học — hãy chuyển lớp hoặc cho nghỉ trước khi xoá', 400));
   const cls = await Class.findByIdAndDelete(req.params.id);
   if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
   success(res, null, 'Xóa thành công');

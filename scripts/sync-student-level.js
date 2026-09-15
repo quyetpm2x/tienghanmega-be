@@ -3,6 +3,11 @@
 // đoạn cascade-update trong classController.update — xem commit sửa kèm script này).
 // Chỉ động tới student có classId hợp lệ trỏ tới 1 lớp đang tồn tại; student không có
 // classId (dữ liệu cũ/tạo tay không gắn lớp) được bỏ qua nguyên vẹn.
+// ⛔ NGỪNG DÙNG từ 2026-09-15: khoá học của học sinh nay nằm ở Enrollment.courseTitle và
+// được classController.update tự đồng bộ. Student.level là trường cũ, không còn được đọc —
+// chạy script này chỉ ghi vào dữ liệu đã đóng băng.
+console.error('⛔ scripts/sync-student-level.js đã ngừng dùng (mô hình ghi danh nhiều khoá). Không chạy.');
+process.exit(1);
 const envFile = process.env.NODE_ENV === 'production' ? '.env' : '.env.development';
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', envFile) });
 if (!process.env.MONGODB_URI) require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });

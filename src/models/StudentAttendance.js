@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 // One document = one session (date) for a class
 // records[] = each student's attendance for that session
 const studentAttendanceSchema = new mongoose.Schema({
+  // Lớp gốc. className chỉ là bản sao để hiển thị (đồng bộ khi đổi tên lớp).
+  classId:    { type: mongoose.Schema.Types.ObjectId, ref: 'Class', default: null, index: true },
   className:  { type: String, required: true },
   teacherId:  { type: mongoose.Schema.Types.ObjectId, ref: 'Teacher', default: null },
   date:       { type: String, required: true },   // "2026-05-20"
@@ -18,5 +20,7 @@ const studentAttendanceSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 studentAttendanceSchema.index({ className: 1, date: 1 }, { unique: true });
+// Mỗi lớp mỗi ngày một buổi — theo lớp gốc (chỉ áp cho bản ghi đã có classId).
+studentAttendanceSchema.index({ classId: 1, date: 1 }, { unique: true, partialFilterExpression: { classId: { $type: 'objectId' } } });
 
 module.exports = mongoose.model('StudentAttendance', studentAttendanceSchema);

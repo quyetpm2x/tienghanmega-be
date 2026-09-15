@@ -28,7 +28,7 @@ Backup được lưu tại: `tienghanmega-be/backups/<ngày-giờ>/tienghanmega_
 
 ```bash
 mongorestore \
-  --uri="mongodb+srv://tienghanmega:tienghanmega6868@cluster0.ukmcscv.mongodb.net/?appName=Cluster0" \
+  --uri="mongodb+srv://tienghanmega:mk_mongoDB@cluster0.ukmcscv.mongodb.net/?appName=Cluster0" \
   --db=<tên_database> \
   backups/<ngày-giờ>/<tên_database>/
 ```
@@ -36,7 +36,7 @@ mongorestore \
 **Ví dụ — copy data từ `test` vào `tienghanmega_product`:**
 ```bash
 mongorestore \
-  --uri="mongodb+srv://tienghanmega:tienghanmega6868@cluster0.ukmcscv.mongodb.net/?appName=Cluster0" \
+  --uri="mongodb+srv://tienghanmega:mk_mongoDB@cluster0.ukmcscv.mongodb.net/?appName=Cluster0" \
   --db=tienghanmega_product \
   backups/2026-06-15_01-28/test/
 ```
@@ -44,7 +44,7 @@ mongorestore \
 **Ví dụ — copy data từ `test` vào `tienghanmega_dev`:**
 ```bash
 mongorestore \
-  --uri="mongodb+srv://tienghanmega:tienghanmega6868@cluster0.ukmcscv.mongodb.net/?appName=Cluster0" \
+  --uri="mongodb+srv://tienghanmega:mk_mongoDB@cluster0.ukmcscv.mongodb.net/?appName=Cluster0" \
   --db=tienghanmega_dev \
   backups/2026-06-15_01-28/test/
 ```

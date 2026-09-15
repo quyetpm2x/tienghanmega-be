@@ -3,7 +3,7 @@ const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
 // Admin-only: quản lý hoa hồng giới thiệu (affiliate) — xem/lọc danh sách các
-// giao dịch hoa hồng đã phát sinh tự động (studentController.maybeCreateCommission)
+// giao dịch hoa hồng đã phát sinh tự động (services/studentEnrollmentService.maybeCreateCommission)
 // và đánh dấu đã trả cho người giới thiệu.
 exports.getAll = async (req, res) => {
   const filter = {};

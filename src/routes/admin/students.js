@@ -7,9 +7,16 @@ router.get('/:id', permit('students.viewDetail'), ctrl.getOne);
 router.post('/', permit('students.create'), ctrl.create);
 router.put('/:id', permit('students.update'), ctrl.update);
 router.delete('/:id', permit('students.delete'), ctrl.remove);
-router.post('/:id/transfer', permit('students.transfer'), ctrl.transfer);
+router.post('/:id/referral-code', permit('students.generateReferral'), ctrl.generateReferralCode);
+
+// Gói đăng ký và từng khoá trong gói.
+router.post('/:id/packages', permit('students.update'), ctrl.addPackage);
+router.put('/:id/packages/:packageId', permit('students.update'), ctrl.updatePackage);
+router.put('/:id/packages/:packageId/adjustment', permit('students.update'), ctrl.setPackagePaid);
+router.put('/:id/enrollments/:enrollmentId', permit('students.update'), ctrl.updateEnrollment);
+router.post('/:id/enrollments/:enrollmentId/transfer', permit('students.transfer'), ctrl.transferEnrollment);
+
 router.get('/:id/payments', permit('students.viewPayments'), ctrl.getPayments);
 router.post('/:id/payments', permit('students.addPayment'), ctrl.addPayment);
-router.post('/:id/referral-code', permit('students.generateReferral'), ctrl.generateReferralCode);
 
 module.exports = router;

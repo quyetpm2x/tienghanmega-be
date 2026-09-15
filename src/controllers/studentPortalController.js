@@ -1,50 +1,80 @@
 const Student = require('../models/Student');
+const Enrollment = require('../models/Enrollment');
+const Payment = require('../models/Payment');
+const { buildPaymentHistory } = require('../utils/paymentHistory');
 const StudentFeedback = require('../models/StudentFeedback');
 const { generateUniqueReferralCode, buildMyReferrals } = require('../utils/referral');
+const { packagesWithState, isActiveInClass } = require('../utils/enrollment');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
 // Everything in this controller derives its scope from req.studentAccount
 // (set by protectStudent) — a student only ever sees their own record.
 
-// Whitelist — không trả về `note` (ghi chú nội bộ của admin/giáo viên về học
-// sinh này, không phải thông tin dành cho học sinh tự xem).
-const STUDENT_FIELDS = 'name phone email className classId level startDate status tuitionStatus amount coursePrice transferHistory';
+// Không trả `note` (ghi chú nội bộ) và các trường cũ một-lớp-một-học-phí.
+const STUDENT_FIELDS = 'name phone email status';
 const CLASS_FIELDS = 'name course teacher days time startDate endDate status color';
 
 exports.getMe = async (req, res, next) => {
   const studentId = req.studentAccount.studentId._id;
-  const student = await Student.findById(studentId).select(STUDENT_FIELDS).populate('classId', CLASS_FIELDS);
+  const student = await Student.findById(studentId).select(STUDENT_FIELDS).lean();
   if (!student) return next(new AppError('Không tìm thấy học sinh', 404));
-  success(res, student);
+  const [byStudent, payments, enrollments] = await Promise.all([
+    packagesWithState([studentId]),
+    Payment.find({ studentId, packageId: { $ne: null } }).select('packageId amount paidAt').lean(),
+    Enrollment.find({ studentId, status: 'active' }).select('classId status startDate')
+      .populate('classId', CLASS_FIELDS).sort({ startDate: 1 }).lean(),
+  ]);
+  // Học sinh xem được học phí của gói (tổng, giảm, phải thu, đã đóng, còn nợ), lịch sử đóng
+  // tiền và trạng thái/ngày bắt đầu của từng khoá — không thấy phần chia giảm nội bộ.
+  const packages = (byStudent.get(String(studentId)) || []).map(p => ({
+    _id: p._id, listTotal: p.listTotal, discount: p.discount, netTotal: p.netTotal,
+    paid: p.paid, debt: p.debt, tuitionStatus: p.tuitionStatus, createdAt: p.createdAt,
+    courses: p.enrollments.map(e => ({
+      _id: e._id, className: e.className, courseTitle: e.courseTitle, status: e.status,
+      startDate: e.startDate, hasClass: !!e.classId,
+    })),
+    paymentHistory: buildPaymentHistory({
+      payments: payments.filter(x => String(x.packageId) === String(p._id)),
+      adjustmentHistory: p.adjustmentHistory || [],
+      paid: p.paid,
+    }),
+  }));
+  success(res, { ...student, packages, enrollments });
 };
 
-// Phản hồi của chính học sinh này cho lớp đang học (nếu đã gửi) — dùng để
-// prefill lại form khi quay lại trang, cho phép sửa thay vì gửi trùng.
-exports.getMyFeedback = async (req, res, next) => {
+// Phản hồi của học sinh cho TỪNG lớp đang học (null = chưa gửi) — để prefill form.
+exports.getMyFeedback = async (req, res) => {
   const studentId = req.studentAccount.studentId._id;
-  const student = await Student.findById(studentId).select('classId');
-  if (!student?.classId) return success(res, null);
-  const feedback = await StudentFeedback.findOne({ studentId, classId: student.classId });
-  success(res, feedback);
+  const enrollments = await Enrollment.find({ studentId, status: 'active', classId: { $ne: null } })
+    .select('classId').populate('classId', 'name teacher').lean();
+  const classIds = enrollments.map(e => e.classId && e.classId._id).filter(Boolean);
+  const feedbacks = await StudentFeedback.find({ studentId, classId: { $in: classIds } }).lean();
+  const byClass = new Map(feedbacks.map(f => [String(f.classId), f]));
+  success(res, enrollments.filter(e => e.classId).map(e => ({
+    classId: e.classId._id,
+    className: e.classId.name,
+    teacher: e.classId.teacher || '',
+    feedback: byClass.get(String(e.classId._id)) || null,
+  })));
 };
 
-// Gửi/cập nhật phản hồi (1 đánh giá sao + nội dung) cho lớp đang học hiện tại
-// — upsert theo (studentId, classId) nên gửi lại chỉ cập nhật, không tạo trùng.
+// Gửi/cập nhật phản hồi cho MỘT lớp đang học — upsert theo (studentId, classId).
 exports.submitFeedback = async (req, res, next) => {
   const studentId = req.studentAccount.studentId._id;
-  const { rating, content } = req.body;
+  const { rating, content, classId } = req.body;
   const numRating = Number(rating);
   // Cho phép nửa sao (VD 3.5) — chỉ cần là bội số của 0.5 trong khoảng 1-5.
   const isHalfStep = Math.round(numRating * 2) === numRating * 2;
   if (!Number.isFinite(numRating) || numRating < 1 || numRating > 5 || !isHalfStep) {
     return next(new AppError('Vui lòng chọn số sao đánh giá từ 1 đến 5 (có thể chọn nửa sao)', 400));
   }
-  const student = await Student.findById(studentId).select('classId');
-  if (!student?.classId) return next(new AppError('Bạn chưa được xếp vào lớp học nào, chưa thể gửi phản hồi', 400));
-
+  if (!classId) return next(new AppError('Vui lòng chọn lớp muốn gửi phản hồi', 400));
+  if (!(await isActiveInClass(studentId, classId))) {
+    return next(new AppError('Bạn không học lớp này nên chưa thể gửi phản hồi', 400));
+  }
   const feedback = await StudentFeedback.findOneAndUpdate(
-    { studentId, classId: student.classId },
+    { studentId, classId },
     { rating: numRating, content: (content || '').trim() },
     { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
   );

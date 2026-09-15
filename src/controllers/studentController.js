@@ -1,121 +1,60 @@
 const Student = require('../models/Student');
+const Class = require('../models/Class');
 const Payment = require('../models/Payment');
-const ReferralCommission = require('../models/ReferralCommission');
-const { generateUniqueReferralCode, resolveReferrer, COMMISSION_RATE } = require('../utils/referral');
+const svc = require('../services/studentEnrollmentService');
+const { attachPackages, activeStudentIdsOfClass } = require('../utils/enrollment');
+const { generateUniqueReferralCode } = require('../utils/referral');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
-// Nếu req.body có field referredByCode (kể cả khi tạo mới lẫn khi sửa), tra
-// cứu xem mã này thuộc học sinh/giảng viên nào rồi gán vào student (chưa
-// save). Trả về AppError nếu mã không tồn tại, null nếu hợp lệ/không đổi gì.
-async function applyReferredByCode(student, body) {
-  if (!('referredByCode' in body)) return null;
-  const raw = (body.referredByCode || '').trim();
-  if (!raw) {
-    student.referredByCode = '';
-    student.referrerModel = null;
-    student.referrerId = undefined;
-    return null;
-  }
-  const referrer = await resolveReferrer(raw);
-  if (!referrer) return new AppError('Mã giới thiệu không tồn tại', 400);
-  if (referrer.model === 'Student' && String(referrer.id) === String(student._id)) {
-    return new AppError('Không thể tự nhập mã giới thiệu của chính mình', 400);
-  }
-  student.referredByCode = raw.toUpperCase();
-  student.referrerModel = referrer.model;
-  student.referrerId = referrer.id;
-  return null;
+// Không trả các trường CŨ (một lớp — một học phí) cho client: nếu còn gửi, giao diện
+// cũ sẽ tiếp tục đọc nhầm số liệu đã ngừng cập nhật mà không ai phát hiện.
+const HIDE_LEGACY = '-classId -className -level -startDate -tuitionStatus -amount -coursePrice -amountHistory -transferHistory';
+
+async function viewOf(id) {
+  const student = await Student.findById(id).select(HIDE_LEGACY).lean();
+  if (!student) throw new AppError('Không tìm thấy học viên', 404);
+  const [view] = await attachPackages([student]);
+  return view;
 }
 
-// Học sinh đang học ('active') + đã đóng đủ học phí ('paid') + có người giới
-// thiệu hợp lệ + CHƯA từng tính hoa hồng cho lượt này -> tạo 1 ReferralCommission
-// (10% coursePrice) và đánh dấu đã tính để không lặp lại (VD: paid -> partial -> paid).
-async function maybeCreateCommission(student) {
-  if (student.status !== 'active') return;
-  if (student.tuitionStatus !== 'paid') return;
-  if (!student.referrerModel || !student.referrerId) return;
-  if (student.commissionCredited) return;
-  const basePrice = student.coursePrice || 0;
-  if (basePrice <= 0) return;
-  await ReferralCommission.create({
-    referrerModel: student.referrerModel,
-    referrerId: student.referrerId,
-    referredStudentId: student._id,
-    basePrice,
-    rate: COMMISSION_RATE,
-    amount: Math.round(basePrice * COMMISSION_RATE),
-  });
-  student.commissionCredited = true;
-}
-
-function getCourseCategory(level) {
-  if (!level) return 'conversation';
-  const l = level.toLowerCase();
-  if (l.includes('sơ cấp') || l.includes('so cap')) return 'beginner';
-  if (l.includes('trung cấp') || l.includes('trung cap')) return 'intermediate';
-  if (l.includes('topik') || l.includes('lộ trình') || l.includes('lo trinh')) return 'topik';
-  return 'conversation';
-}
-
+// GET /admin/students?classId=&className=&tuitionStatus=
 exports.getAll = async (req, res) => {
-  const { className, tuitionStatus } = req.query;
+  const { classId, className, tuitionStatus } = req.query;
   const filter = {};
-  if (className) filter.className = className;
-  if (tuitionStatus) filter.tuitionStatus = tuitionStatus;
-  const students = await Student.find(filter).sort({ createdAt: -1 });
-  success(res, students);
-};
-
-exports.getOne = async (req, res, next) => {
-  const student = await Student.findById(req.params.id);
-  if (!student) return next(new AppError('Không tìm thấy học viên', 404));
-  success(res, student);
-};
-
-exports.create = async (req, res, next) => {
-  const student = new Student(req.body);
-  student.referralCode = await generateUniqueReferralCode();
-  const refErr = await applyReferredByCode(student, req.body);
-  if (refErr) return next(refErr);
-  await maybeCreateCommission(student); // phòng trường hợp tạo thẳng với status active + đã đóng đủ + có người giới thiệu
-  await student.save();
-  // Form thêm học sinh có ô "đã đóng" nhập tay. Nếu chỉ ghi vào student.amount thì
-  // khoản tiền đó KHÔNG có ngày đóng, mà doanh thu nay gom theo ngày đóng — tiền sẽ
-  // thành "mồ côi" và phải tính ước lượng theo ngày khai giảng. Sinh luôn bản ghi
-  // Payment tương ứng (ngày đóng = ngày khai giảng) để mọi khoản thu MỚI đều có ngày.
-  if (student.amount > 0) {
-    await Payment.create({
-      studentId:      student._id,
-      studentName:    student.name,
-      classId:        student.classId,
-      className:      student.className,
-      courseCategory: getCourseCategory(student.level),
-      amount:         student.amount,
-      paidAt:         student.startDate ? new Date(student.startDate) : new Date(),
-      note:           'Ghi nhận khi thêm học viên',
-    });
+  let cid = classId;
+  if (!cid && className) {
+    const cls = await Class.findOne({ name: className }).select('_id').lean();
+    if (!cls) return success(res, []);
+    cid = cls._id;
   }
-  success(res, student, 'Thêm học viên thành công', 201);
+  if (cid) filter._id = { $in: await activeStudentIdsOfClass(cid) };
+  const students = await Student.find(filter).select(HIDE_LEGACY).sort({ createdAt: -1 }).lean();
+  let rows = await attachPackages(students);
+  if (tuitionStatus) rows = rows.filter(s => s.summary.tuitionStatus === tuitionStatus);
+  success(res, rows);
 };
 
-exports.update = async (req, res, next) => {
-  const student = await Student.findById(req.params.id);
-  if (!student) return next(new AppError('Không tìm thấy học viên', 404));
-  const refErr = await applyReferredByCode(student, req.body);
-  if (refErr) return next(refErr);
-  // referralCode/referrerModel/referrerId/commissionCredited chỉ được hệ thống
-  // tự set (qua applyReferredByCode/generateReferralCode/maybeCreateCommission),
-  // không cho client ghi đè trực tiếp qua form sửa thông tin thông thường.
-  const { referredByCode, referrerModel, referrerId, referralCode, commissionCredited, ...rest } = req.body;
-  Object.assign(student, rest);
-  await maybeCreateCommission(student);
-  await student.save();
-  success(res, student, 'Cập nhật thành công');
+exports.getOne = async (req, res) => {
+  success(res, await viewOf(req.params.id));
 };
 
-// POST /admin/students/:id/referral-code — sinh mã giới thiệu cho học sinh
-// CHƯA có mã (idempotent: đã có mã thì trả về mã hiện tại, không sinh lại).
+exports.create = async (req, res) => {
+  const id = await svc.createStudent({ body: req.body, admin: req.admin });
+  success(res, await viewOf(id), 'Thêm học viên thành công', 201);
+};
+
+exports.update = async (req, res) => {
+  await svc.updateStudent({ id: req.params.id, body: req.body, admin: req.admin });
+  success(res, await viewOf(req.params.id), 'Cập nhật thành công');
+};
+
+exports.remove = async (req, res) => {
+  await svc.deleteStudent({ id: req.params.id });
+  success(res, null, 'Xóa thành công');
+};
+
+// POST /admin/students/:id/referral-code — sinh mã cho học sinh CHƯA có (idempotent).
 exports.generateReferralCode = async (req, res, next) => {
   const student = await Student.findById(req.params.id);
   if (!student) return next(new AppError('Không tìm thấy học viên', 404));
@@ -123,71 +62,45 @@ exports.generateReferralCode = async (req, res, next) => {
     student.referralCode = await generateUniqueReferralCode();
     await student.save();
   }
-  success(res, student, 'Đã tạo mã giới thiệu');
+  success(res, await viewOf(student._id), 'Đã tạo mã giới thiệu');
 };
 
-exports.remove = async (req, res, next) => {
-  const student = await Student.findByIdAndDelete(req.params.id);
-  if (!student) return next(new AppError('Không tìm thấy học viên', 404));
-  success(res, null, 'Xóa thành công');
+exports.addPackage = async (req, res) => {
+  await svc.addPackage({ studentId: req.params.id, body: req.body, admin: req.admin });
+  success(res, await viewOf(req.params.id), 'Đã thêm gói đăng ký', 201);
 };
 
-exports.transfer = async (req, res, next) => {
-  const student = await Student.findById(req.params.id);
-  if (!student) return next(new AppError('Không tìm thấy học viên', 404));
-  const { classId, className, level } = req.body;
-  if (!className) return next(new AppError('Thiếu thông tin lớp mới', 400));
-
-  student.transferHistory = student.transferHistory || [];
-  student.transferHistory.push({
-    classId: student.classId,
-    className: student.className,
-    level: student.level,
-    transferredAt: new Date(),
-  });
-  student.classId = classId;
-  student.className = className;
-  student.level = level;
-  await student.save();
-  success(res, student, 'Chuyển lớp thành công');
+exports.updatePackage = async (req, res) => {
+  await svc.updatePackage({ studentId: req.params.id, packageId: req.params.packageId, body: req.body });
+  success(res, await viewOf(req.params.id), 'Đã cập nhật gói đăng ký');
 };
 
-// GET /admin/students/:id/payments
+exports.setPackagePaid = async (req, res) => {
+  await svc.setPackagePaid({ studentId: req.params.id, packageId: req.params.packageId, body: req.body, admin: req.admin });
+  success(res, await viewOf(req.params.id), 'Đã cập nhật số tiền đã nộp');
+};
+
+exports.updateEnrollment = async (req, res) => {
+  await svc.updateEnrollment({ studentId: req.params.id, enrollmentId: req.params.enrollmentId, body: req.body });
+  success(res, await viewOf(req.params.id), 'Đã cập nhật khoá học');
+};
+
+exports.transferEnrollment = async (req, res) => {
+  await svc.transferEnrollment({ studentId: req.params.id, enrollmentId: req.params.enrollmentId, body: req.body });
+  success(res, await viewOf(req.params.id), 'Chuyển lớp thành công');
+};
+
+// GET /admin/students/:id/payments?packageId=
 exports.getPayments = async (req, res, next) => {
-  const student = await Student.findById(req.params.id).select('_id');
-  if (!student) return next(new AppError('Không tìm thấy học viên', 404));
-  const payments = await Payment.find({ studentId: req.params.id }).sort({ paidAt: -1 });
+  const exists = await Student.exists({ _id: req.params.id });
+  if (!exists) return next(new AppError('Không tìm thấy học viên', 404));
+  const filter = { studentId: req.params.id };
+  if (req.query.packageId) filter.packageId = req.query.packageId;
+  const payments = await Payment.find(filter).sort({ paidAt: -1 }).lean();
   success(res, payments);
 };
 
-// POST /admin/students/:id/payments
-exports.addPayment = async (req, res, next) => {
-  const student = await Student.findById(req.params.id);
-  if (!student) return next(new AppError('Không tìm thấy học viên', 404));
-
-  const { amount, paidAt, note } = req.body;
-  if (!amount || Number(amount) <= 0) return next(new AppError('Số tiền không hợp lệ', 400));
-
-  const payment = await Payment.create({
-    studentId:      student._id,
-    studentName:    student.name,
-    classId:        student.classId,
-    className:      student.className,
-    courseCategory: getCourseCategory(student.level),
-    amount:         Number(amount),
-    paidAt:         paidAt ? new Date(paidAt) : new Date(),
-    note:           note || '',
-  });
-
-  student.amount = (student.amount || 0) + Number(amount);
-  if ((student.coursePrice || 0) > 0) {
-    if (student.amount >= student.coursePrice) student.tuitionStatus = 'paid';
-    else student.tuitionStatus = 'partial';
-  } else {
-    student.tuitionStatus = 'partial';
-  }
-  await maybeCreateCommission(student);
-  await student.save();
-
-  success(res, { payment, student }, 'Ghi nhận thanh toán thành công');
+exports.addPayment = async (req, res) => {
+  const payment = await svc.addPayment({ studentId: req.params.id, body: req.body });
+  success(res, { payment, student: await viewOf(req.params.id) }, 'Ghi nhận thanh toán thành công');
 };

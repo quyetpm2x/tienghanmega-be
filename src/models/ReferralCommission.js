@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 // 1 giao dịch hoa hồng giới thiệu — tạo TỰ ĐỘNG khi 1 học sinh được giới
 // thiệu (Student.referrerModel/referrerId) chuyển sang trạng thái đang học
-// ('active') VÀ đã đóng đủ học phí ('paid'), xem studentController.js. Admin
+// ('active') VÀ đã đóng đủ học phí ('paid'), xem services/studentEnrollmentService.js. Admin
 // theo dõi/đánh dấu đã trả qua model này (trang Quản lý affiliate).
 const referralCommissionSchema = new mongoose.Schema({
   referrerModel: { type: String, enum: ['Student', 'Teacher'], required: true },

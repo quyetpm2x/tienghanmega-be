@@ -67,7 +67,7 @@ const protectStudent = async (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     if (decoded.role !== 'student') return next(new AppError('Token không hợp lệ', 401));
-    const account = await Account.findById(decoded.id).select({ password: 0 }).populate('studentId');
+    const account = await Account.findById(decoded.id).select({ password: 0 }).populate('studentId', 'name phone email status');
     if (!account || !account.isActive) return next(new AppError('Tài khoản không tồn tại hoặc đã bị khoá', 401));
     req.studentAccount = account;
     next();

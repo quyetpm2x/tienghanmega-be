@@ -53,21 +53,32 @@ async function resolveReferrer(rawCode) {
 // (đã đủ điều kiện, đang chờ hệ thống/admin trả) | 'not_eligible' (chưa đóng
 // đủ học phí hoặc chưa ở trạng thái đang học nên chưa phát sinh hoa hồng).
 async function buildMyReferrals(referrerModel, referrerId) {
+  // require muộn: referral.js được nạp bởi service ghi dữ liệu, tránh vòng phụ thuộc.
   const ReferralCommission = require('../models/ReferralCommission');
+  const { packagesWithState } = require('./enrollment');
+  const { summarizePackages } = require('./packageMath');
   const referred = await Student.find({ referrerModel, referrerId })
-    .select('name status tuitionStatus coursePrice createdAt')
-    .sort({ createdAt: -1 });
-  const commissions = await ReferralCommission.find({ referrerModel, referrerId });
+    .select('name status createdAt')
+    .sort({ createdAt: -1 })
+    .lean();
+  const [commissions, packagesByStudent] = await Promise.all([
+    ReferralCommission.find({ referrerModel, referrerId }).lean(),
+    packagesWithState(referred.map(s => s._id)),
+  ]);
   const commissionByStudent = new Map(commissions.map(c => [String(c.referredStudentId), c]));
   return referred.map(s => {
     const c = commissionByStudent.get(String(s._id));
+    const packages = packagesByStudent.get(String(s._id)) || [];
+    // Chưa phát sinh thì ước tính 10% GIÁ NIÊM YẾT gói đầu tiên — gói thường là gói kích
+    // hoạt hoa hồng (mỗi học sinh chỉ một lần).
+    const estimateBase = packages[0] ? packages[0].listTotal : 0;
     return {
       studentId: s._id,
       name: s.name,
       status: s.status,
-      tuitionStatus: s.tuitionStatus,
+      tuitionStatus: summarizePackages(packages).tuitionStatus,
       commissionStatus: c ? c.status : 'not_eligible',
-      amount: c ? c.amount : Math.round((s.coursePrice || 0) * COMMISSION_RATE),
+      amount: c ? c.amount : Math.round(estimateBase * COMMISSION_RATE),
       paidAt: c ? c.paidAt : null,
       createdAt: s.createdAt,
     };

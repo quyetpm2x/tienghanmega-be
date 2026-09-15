@@ -1,368 +1,277 @@
 const Revenue = require('../models/Revenue');
-const Student  = require('../models/Student');
-const Expense  = require('../models/Expense');
-const Payment  = require('../models/Payment');
+const Student = require('../models/Student');
+const Expense = require('../models/Expense');
+const Payment = require('../models/Payment');
+const EnrollmentPackage = require('../models/EnrollmentPackage');
+const Enrollment = require('../models/Enrollment');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { packageFacts, aggregateByMonth, vnDateStr, EMPTY_BREAKDOWN } = require('../utils/revenueModel');
 
-// Payment.paidAt lưu kiểu Date (UTC). Doanh thu phải cắt tháng theo giờ VIỆT NAM:
-// một khoản đóng lúc 0h30 ngày 01/10 giờ VN được lưu là 17h30 ngày 30/09 UTC —
-// cắt theo UTC sẽ đẩy nhầm sang tháng 9.
-const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
-function vnDateStr(d) {
-  return new Date(new Date(d).getTime() + VN_OFFSET_MS).toISOString().slice(0, 10);
+const emptyExpenses = () => ({ salary: 0, rent: 0, marketing: 0, utilities: 0, other: 0, total: 0 });
+
+// Nạp toàn bộ gói + ghi danh + khoản thu MỘT lần và dựng "sự thật tiền" của từng gói.
+// Mọi con số ở controller này đều suy từ đây nên các bảng luôn khớp thẻ KPI.
+async function loadPackageData() {
+  const [packages, enrollments, payments] = await Promise.all([
+    EnrollmentPackage.find().select('-legacy -adjustmentHistory').lean(),
+    Enrollment.find().select('packageId className courseTitle courseCategory netPrice startDate status').sort({ createdAt: 1 }).lean(),
+    Payment.find({ packageId: { $ne: null } }).select('packageId studentId amount paidAt note').lean(),
+  ]);
+  const byPkg = new Map();
+  for (const e of enrollments) {
+    const k = String(e.packageId);
+    if (!byPkg.has(k)) byPkg.set(k, []);
+    byPkg.get(k).push(e);
+  }
+  for (const p of packages) p.enrollments = byPkg.get(String(p._id)) || [];
+  return { packages, payments, facts: packageFacts(packages, payments) };
 }
 
-function getCourseCategory(level) {
-  if (!level) return 'conversation';
-  const l = level.toLowerCase();
-  if (l.includes('lộ trình') || l.includes('lo trinh') || l.includes('combo')) return 'bundle';
-  if (l.includes('sơ cấp') || l.includes('so cap')) return 'beginner';
-  if (l.includes('trung cấp') || l.includes('trung cap')) return 'intermediate';
-  if (l.includes('topik')) return 'topik';
-  return 'conversation';
-}
+// Khoá chưa xếp lớp hiện tên khoá học.
+const classNamesOf = pkg => pkg.enrollments.map(e => e.className || e.courseTitle).filter(Boolean);
+const categoryOfPackage = pkg => (pkg.enrollments.length === 1 ? pkg.enrollments[0].courseCategory : 'bundle');
+const earliestStart = pkg => pkg.enrollments.map(e => (e.startDate || '').slice(0, 10)).filter(Boolean).sort()[0] || '';
 
-// GET /admin/revenue/summary — computed from Student collection
-// Optional query: ?from=YYYY-MM-DD&to=YYYY-MM-DD  (exact date filtering)
-exports.getSummary = async (req, res, next) => {
-  try {
-  const { from, to } = req.query;
-
-  // Exact date comparison (YYYY-MM-DD string comparison works correctly)
-  const inDateRange = (dateStr) => {
-    if (!from && !to) return true;
-    if (!dateStr) return false;
-    const d = String(dateStr).slice(0, 10);
-    return (!from || d >= from) && (!to || d <= to);
+function pageParams(req) {
+  return {
+    page: Math.max(1, parseInt(req.query.page, 10) || 1),
+    limit: Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 20)),
   };
+}
 
-  const [students, targets, expenses, payments] = await Promise.all([
-    Student.find({
-      status: { $nin: ['dropped'] },
-      startDate: { $exists: true, $ne: '' },
-      $or: [{ coursePrice: { $gt: 0 } }, { amount: { $gt: 0 } }],
-    }).select('startDate coursePrice amount tuitionStatus level className'),
-    Revenue.find().select('month target'),
-    Expense.find(),
-    Payment.find().select('studentId amount paidAt'),
+function inRangeFn(from, to) {
+  return d => (!from || d >= from) && (!to || d <= to);
+}
+
+async function studentMap(ids, fields) {
+  const students = await Student.find({ _id: { $in: ids } }).select(fields).lean();
+  return new Map(students.map(s => [String(s._id), s]));
+}
+
+// GET /admin/revenue/summary?from=YYYY-MM-DD&to=YYYY-MM-DD
+// Mỗi tháng gom theo NHÓM GÓI CHỐT trong tháng (chốt = khoản đóng đầu tiên của gói):
+// revenue = Σ học phí gói ghi nhận trọn, collected = Σ đã nộp (kẹp), debt = Σ còn nợ.
+exports.getSummary = async (req, res) => {
+  const { from, to } = req.query;
+  const inRange = inRangeFn(from, to);
+  const [{ packages, facts }, targets, expenses] = await Promise.all([
+    loadPackageData(),
+    Revenue.find().select('month target').lean(),
+    Expense.find().lean(),
   ]);
 
-  // Build expense map — filter by paidAt date, fallback to month-01
   const expenseMap = {};
   let totalExpenses = 0;
-  expenses.forEach(e => {
+  for (const e of expenses) {
     const key = e.month;
-    if (!key) return;
-    const paidDate = e.paidAt
-      ? new Date(e.paidAt).toISOString().slice(0, 10)
-      : `${key}-01`;
-    if (!inDateRange(paidDate)) return;
-    if (!expenseMap[key]) expenseMap[key] = { salary:0, rent:0, marketing:0, utilities:0, other:0, total:0 };
+    if (!key) continue;
+    const paidDate = e.paidAt ? new Date(e.paidAt).toISOString().slice(0, 10) : `${key}-01`;
+    if ((from || to) && !inRange(paidDate)) continue;
+    if (!expenseMap[key]) expenseMap[key] = emptyExpenses();
     const cat = e.category || 'other';
     expenseMap[key][cat] = (expenseMap[key][cat] || 0) + (e.amount || 0);
     expenseMap[key].total += e.amount || 0;
     totalExpenses += e.amount || 0;
-  });
+  }
 
-  // 2 con số khác hẳn nhau, KHÔNG cộng vào nhau:
-  //   revenue   = HỌC PHÍ KÝ MỚI — tổng học phí của học sinh khai giảng trong tháng,
-  //               ghi trọn gói 1 lần theo startDate (dù chưa đóng đồng nào).
-  //   collected = DOANH THU — tiền học phí THỰC NHẬN, gom theo ngày đóng (Payment.paidAt,
-  //               giờ VN). Đây mới là con số dùng để tính lợi nhuận.
-  const monthMap = {};
-  const ensureMonth = key => {
-    if (!monthMap[key]) {
-      monthMap[key] = {
-        revenue: 0, collected: 0, hasEstimated: false,
-        breakdown: { beginner: 0, intermediate: 0, topik: 0, conversation: 0, bundle: 0 },
-      };
-    }
-    return monthMap[key];
-  };
+  const months = aggregateByMonth(packages, facts, { from, to });
+  for (const key of Object.keys(expenseMap)) {
+    if (!months[key]) months[key] = { revenue: 0, collected: 0, debt: 0, hasEstimated: false, breakdown: EMPTY_BREAKDOWN() };
+  }
 
-  // Học sinh ĐÃ có bản ghi Payment → tiền của họ luôn lấy theo ngày đóng thật.
-  const paidStudentIds = new Set(payments.map(p => String(p.studentId)));
-
-  // Học phí ký mới — theo ngày khai giảng.
-  students.forEach(s => {
-    const dateKey = (s.startDate || '').slice(0, 10); // YYYY-MM-DD
-    const key = dateKey.slice(0, 7);                  // YYYY-MM
-    if (!/^\d{4}-\d{2}$/.test(key)) return;
-    if (!inDateRange(dateKey)) return;
-    const rev = (s.coursePrice || 0) > 0 ? s.coursePrice : (s.amount || 0);
-    const m = ensureMonth(key);
-    m.revenue += rev;
-    const cat = getCourseCategory(s.level);
-    m.breakdown[cat] = (m.breakdown[cat] || 0) + rev;
-  });
-
-  // Doanh thu — theo ngày đóng thật.
-  payments.forEach(p => {
-    const dateKey = vnDateStr(p.paidAt);
-    if (!inDateRange(dateKey)) return;
-    ensureMonth(dateKey.slice(0, 7)).collected += p.amount || 0;
-  });
-
-  // Dự phòng cho dữ liệu CŨ: trước đây admin gõ thẳng số tiền đã đóng vào form học
-  // sinh, không sinh bản ghi Payment nào — những khoản đó không có ngày đóng để gom.
-  // Bỏ qua thì doanh thu các tháng cũ tụt về 0, nên vẫn tính vào tháng khai giảng như
-  // cách cũ và đánh dấu hasEstimated để FE nói rõ đây là số ước lượng.
-  students.forEach(s => {
-    if (paidStudentIds.has(String(s._id))) return;
-    if (!(s.amount > 0)) return;
-    const dateKey = (s.startDate || '').slice(0, 10);
-    const key = dateKey.slice(0, 7);
-    if (!/^\d{4}-\d{2}$/.test(key)) return;
-    if (!inDateRange(dateKey)) return;
-    const m = ensureMonth(key);
-    m.collected += s.amount;
-    m.hasEstimated = true;
-  });
-
-  // Build target lookup — support both 'YYYY-MM' and legacy 'Tháng M/YYYY'
   const targetMap = {};
-  targets.forEach(t => {
+  for (const t of targets) {
     const raw = t.month || '';
-    if (/^\d{4}-\d{2}$/.test(raw)) {
-      targetMap[raw] = t.target || 0;
-    } else {
+    if (/^\d{4}-\d{2}$/.test(raw)) targetMap[raw] = t.target || 0;
+    else {
       const m = raw.match(/(\d+)\/(\d{4})/);
       if (m) targetMap[`${m[2]}-${m[1].padStart(2, '0')}`] = t.target || 0;
     }
-  });
+  }
 
-  // Công nợ = DƯ NỢ HIỆN TẠI của toàn bộ học sinh, KHÔNG lọc theo tháng: học phí ký
-  // và tiền đóng nay nằm ở 2 mốc thời gian khác nhau nên "nợ trong 1 tháng" không còn
-  // nghĩa. Đây là số dư tại thời điểm xem.
-  const totalDebt = students.reduce(
-    (sum, s) => sum + ((s.coursePrice || 0) > 0 ? Math.max(0, s.coursePrice - (s.amount || 0)) : 0), 0);
-
-  // Add expense-only months (months with in-range expenses but no students)
-  Object.keys(expenseMap).forEach(ensureMonth);
-
-  const rows = Object.entries(monthMap)
+  const totalDebt = [...facts.values()].reduce((s, f) => s + f.debt, 0);
+  const rows = Object.entries(months)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, data]) => {
+    .map(([key, m]) => {
       const [year, mo] = key.split('-');
+      const exp = expenseMap[key] || emptyExpenses();
       return {
-        _month:    key,
-        month:     `Tháng ${parseInt(mo)}/${year}`,
-        shortMonth: `T${parseInt(mo)}`,
-        revenue:   data.revenue,
-        target:    targetMap[key] || 0,
-        collected: data.collected,
-        // true = tháng này còn tiền lấy từ dữ liệu cũ (không có ngày đóng thật)
-        hasEstimated: data.hasEstimated,
-        breakdown: data.breakdown,
-        expenses: expenseMap[key] || { salary:0, rent:0, marketing:0, utilities:0, other:0, total:0 },
-        profit: data.collected - (expenseMap[key]?.total || 0),
+        _month: key,
+        month: `Tháng ${parseInt(mo, 10)}/${year}`,
+        shortMonth: `T${parseInt(mo, 10)}`,
+        revenue: m.revenue,
+        collected: m.collected,
+        debt: m.debt,
+        target: targetMap[key] || 0,
+        hasEstimated: m.hasEstimated,
+        breakdown: m.breakdown,
+        expenses: exp,
+        profit: m.revenue - exp.total,
+        profitCash: m.collected - exp.total,
       };
     });
-
   success(res, { rows, totalDebt, totalExpenses });
-  } catch (err) { next(err); }
 };
 
-// GET /admin/revenue/breakdown — aggregated totals + category breakdown for the 3 KPI boxes
-// Always returns all-time data — no date filter (independent from the chart section)
-exports.getBreakdown = async (req, res, next) => {
-  try {
-    const [students, expenses, payments] = await Promise.all([
-      Student.find({
-        status: { $nin: ['dropped'] },
-        startDate: { $exists: true, $ne: '' },
-        $or: [{ coursePrice: { $gt: 0 } }, { amount: { $gt: 0 } }],
-      }).select('startDate coursePrice amount tuitionStatus level'),
-      Expense.find(),
-      Payment.find().select('studentId amount paidAt'),
-    ]);
+// GET /admin/revenue/breakdown — tổng toàn thời gian, cùng quy tắc tháng chốt.
+exports.getBreakdown = async (req, res) => {
+  const [{ packages, facts }, expenses] = await Promise.all([loadPackageData(), Expense.find().lean()]);
+  const byMonthRaw = aggregateByMonth(packages, facts, {});
 
-    const revenueBreakdown = { beginner: 0, intermediate: 0, topik: 0, conversation: 0, bundle: 0 };
-    const byMonth = {};
-    const ensureMonth = mk => {
-      if (!byMonth[mk]) byMonth[mk] = { revenue:0, collected:0, hasEstimated:false, expenses:{ salary:0,rent:0,marketing:0,utilities:0,other:0,total:0 }, breakdown:{ beginner:0,intermediate:0,topik:0,conversation:0,bundle:0 } };
-      return byMonth[mk];
+  let totalRevenue = 0, totalCollected = 0;
+  const revenueBreakdown = EMPTY_BREAKDOWN();
+  const byMonth = {};
+  for (const [mk, m] of Object.entries(byMonthRaw)) {
+    totalRevenue += m.revenue;
+    totalCollected += m.collected;
+    for (const [k, v] of Object.entries(m.breakdown)) revenueBreakdown[k] += v;
+    byMonth[mk] = { ...m, expenses: emptyExpenses() };
+  }
+  const totalDebt = [...facts.values()].reduce((s, f) => s + f.debt, 0);
+
+  const expenseBreakdown = { salary: 0, rent: 0, marketing: 0, utilities: 0, other: 0 };
+  let totalExpenses = 0;
+  for (const e of expenses) {
+    const mk = e.month;
+    if (!mk) continue;
+    const cat = e.category || 'other';
+    expenseBreakdown[cat] = (expenseBreakdown[cat] || 0) + (e.amount || 0);
+    totalExpenses += e.amount || 0;
+    if (!byMonth[mk]) byMonth[mk] = { revenue: 0, collected: 0, debt: 0, hasEstimated: false, breakdown: EMPTY_BREAKDOWN(), expenses: emptyExpenses() };
+    byMonth[mk].expenses[cat] = (byMonth[mk].expenses[cat] || 0) + (e.amount || 0);
+    byMonth[mk].expenses.total += e.amount || 0;
+  }
+  const months = Object.keys(byMonth).sort();
+  for (const mk of months) {
+    const [yr, mo] = mk.split('-');
+    byMonth[mk].month = `Tháng ${parseInt(mo, 10)}/${yr}`;
+    byMonth[mk].profit = byMonth[mk].revenue - byMonth[mk].expenses.total;
+    byMonth[mk].profitCash = byMonth[mk].collected - byMonth[mk].expenses.total;
+  }
+  success(res, { totalRevenue, totalCollected, totalExpenses, totalDebt, revenueBreakdown, expenseBreakdown, months, byMonth });
+};
+
+// Gói chốt trong kỳ đang xem (dùng chung cho 3 bảng danh sách).
+function closedInRange(packages, facts, from, to) {
+  const inRange = inRangeFn(from, to);
+  return packages.filter(p => {
+    const f = facts.get(String(p._id));
+    return f && f.close && inRange(f.close.date);
+  });
+}
+
+// GET /admin/revenue/closed-students — DANH SÁCH DOANH THU: mỗi dòng MỘT GÓI chốt trong
+// kỳ. Tổng bảng = thẻ Doanh thu / Đã đóng / Công nợ của cùng kỳ.
+exports.getClosedStudentList = async (req, res) => {
+  const { from, to } = req.query;
+  const { page, limit } = pageParams(req);
+  const { packages, facts } = await loadPackageData();
+  const scoped = closedInRange(packages, facts, from, to);
+  const students = await studentMap(scoped.map(p => p.studentId), 'name');
+  const rows = scoped.map(p => {
+    const f = facts.get(String(p._id));
+    const names = classNamesOf(p);
+    return {
+      _id: String(p._id), studentId: String(p.studentId),
+      closeDate: f.close.date, estimated: f.close.estimated, startDate: earliestStart(p),
+      studentName: students.get(String(p.studentId))?.name || '',
+      className: names.join(' + '), classNames: names, courseCategory: categoryOfPackage(p),
+      listTotal: p.listTotal, discount: p.discount,
+      contract: p.netTotal, paid: f.paid, remaining: f.debt, tuitionStatus: f.tuitionStatus,
     };
-    let totalRevenue = 0, totalCollected = 0, totalDebt = 0;
-    const paidStudentIds = new Set(payments.map(p => String(p.studentId)));
+  }).sort((a, b) => b.closeDate.localeCompare(a.closeDate));
 
-    // Học phí ký mới + dư nợ — theo ngày khai giảng. Xem chú thích ở getSummary:
-    // revenue và collected là 2 con số khác nhau, không cộng vào nhau.
-    students.forEach(s => {
-      const dateKey = (s.startDate || '').slice(0, 10);
-      if (!/^\d{4}-\d{2}/.test(dateKey)) return;
-      const mk = dateKey.slice(0, 7);
-      const rev = (s.coursePrice || 0) > 0 ? s.coursePrice : (s.amount || 0);
-      totalRevenue += rev;
-      const cat = getCourseCategory(s.level);
-      revenueBreakdown[cat] += rev;
-      const m = ensureMonth(mk);
-      m.revenue += rev;
-      m.breakdown[cat] += rev;
-      if ((s.coursePrice || 0) > 0) totalDebt += Math.max(0, s.coursePrice - (s.amount || 0));
-    });
-
-    // Doanh thu — theo ngày đóng thật (giờ VN).
-    payments.forEach(p => {
-      const mk = vnDateStr(p.paidAt).slice(0, 7);
-      totalCollected += p.amount || 0;
-      ensureMonth(mk).collected += p.amount || 0;
-    });
-
-    // Dự phòng cho dữ liệu cũ không có ngày đóng — xem getSummary.
-    students.forEach(s => {
-      if (paidStudentIds.has(String(s._id)) || !(s.amount > 0)) return;
-      const mk = (s.startDate || '').slice(0, 7);
-      if (!/^\d{4}-\d{2}$/.test(mk)) return;
-      totalCollected += s.amount;
-      const m = ensureMonth(mk);
-      m.collected += s.amount;
-      m.hasEstimated = true;
-    });
-
-    const expenseBreakdown = { salary: 0, rent: 0, marketing: 0, utilities: 0, other: 0 };
-    let totalExpenses = 0;
-
-    expenses.forEach(e => {
-      const mk = e.month;
-      if (!mk) return;
-      const cat = e.category || 'other';
-      expenseBreakdown[cat] = (expenseBreakdown[cat] || 0) + (e.amount || 0);
-      totalExpenses += e.amount || 0;
-      ensureMonth(mk);
-      byMonth[mk].expenses[cat] = (byMonth[mk].expenses[cat] || 0) + (e.amount || 0);
-      byMonth[mk].expenses.total += e.amount || 0;
-    });
-
-    const months = Object.keys(byMonth).sort();
-    months.forEach(mk => {
-      const [yr, mo] = mk.split('-');
-      byMonth[mk].month   = `Tháng ${parseInt(mo)}/${yr}`;
-      byMonth[mk].profit  = byMonth[mk].collected - byMonth[mk].expenses.total;
-    });
-
-    success(res, { totalRevenue, totalCollected, totalExpenses, totalDebt, revenueBreakdown, expenseBreakdown, months, byMonth });
-  } catch (err) { next(err); }
+  success(res, {
+    items: rows.slice((page - 1) * limit, page * limit),
+    total: rows.length,
+    totalContract: rows.reduce((s, r) => s + r.contract, 0),
+    totalPaid: rows.reduce((s, r) => s + r.paid, 0),
+    totalRemaining: rows.reduce((s, r) => s + r.remaining, 0),
+    estimatedCount: rows.filter(r => r.estimated).length,
+    page, limit,
+  });
 };
 
-// GET /admin/revenue/payments — DANH SÁCH từng khoản thu được tính vào doanh thu,
-// phân trang phía server. Dùng đúng quy tắc lọc của getSummary để tổng của bảng luôn
-// khớp thẻ "Doanh thu": khoản thu thật lọc theo paidAt (giờ VN), cộng thêm các dòng
-// ƯỚC LƯỢNG của học sinh chưa từng có bản ghi Payment (tiền cũ nhập tay, không có ngày).
-//
-// total/totalAmount tính trên TOÀN BỘ kỳ chứ không phải trang hiện tại — dòng tổng ở
-// chân bảng phải khớp thẻ dù đang đứng ở trang nào.
-exports.getPaymentList = async (req, res, next) => {
-  try {
-    const { from, to } = req.query;
-    const page  = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 20));
-    const inRange = d => (!from || d >= from) && (!to || d <= to);
+// GET /admin/revenue/payments — mỗi lần đóng MỘT dòng, cột lớp liệt kê các khoá của gói.
+// Chỉ lấy khoản thu của nhóm gói chốt trong kỳ (kể cả lần đóng rơi sang tháng sau) để
+// tổng bảng = thẻ "Đã đóng". Phần chênh giữa đã nộp và Σ khoản thu (sửa tay, dữ liệu cũ)
+// thêm thành một dòng "điều chỉnh tay".
+exports.getPaymentList = async (req, res) => {
+  const { from, to } = req.query;
+  const { page, limit } = pageParams(req);
+  const { packages, payments, facts } = await loadPackageData();
+  const scoped = closedInRange(packages, facts, from, to);
+  const pkgById = new Map(scoped.map(p => [String(p._id), p]));
+  const students = await studentMap(scoped.map(p => p.studentId), 'name');
 
-    const [payments, students] = await Promise.all([
-      Payment.find().select('studentId studentName className courseCategory amount paidAt note').lean(),
-      Student.find({
-        status: { $nin: ['dropped'] },
-        startDate: { $exists: true, $ne: '' },
-        $or: [{ coursePrice: { $gt: 0 } }, { amount: { $gt: 0 } }],
-      }).select('name className level startDate amount').lean(),
-    ]);
-
-    const paidStudentIds = new Set(payments.map(p => String(p.studentId)));
-    // Ngày khai giảng tra theo học sinh — để bảng có cột riêng cho CẢ khoản thu thật,
-    // không riêng dòng ước lượng. Không tốn thêm truy vấn vì students đã nạp ở trên.
-    // Khoản thu của học sinh đã nghỉ (không nằm trong students) thì để null.
-    const startDateById = new Map(students.map(s => [String(s._id), (s.startDate || '').slice(0, 10) || null]));
-    const rows = [];
-
-    payments.forEach(p => {
-      const date = vnDateStr(p.paidAt);
-      if (!inRange(date)) return;
-      rows.push({
-        _id: String(p._id), date, startDate: startDateById.get(String(p.studentId)) || null,
-        studentName: p.studentName || '', className: p.className || '',
-        courseCategory: p.courseCategory || '', amount: p.amount || 0,
-        note: p.note || '', estimated: false,
-      });
+  const rows = [];
+  for (const pay of payments) {
+    const pkg = pkgById.get(String(pay.packageId));
+    if (!pkg) continue;
+    rows.push({
+      _id: String(pay._id), kind: 'payment',
+      date: vnDateStr(pay.paidAt), closeDate: facts.get(String(pkg._id)).close.date,
+      studentName: students.get(String(pkg.studentId))?.name || '',
+      className: classNamesOf(pkg).join(' + '), courseCategory: categoryOfPackage(pkg),
+      amount: pay.amount || 0, note: pay.note || '',
     });
-
-    students.forEach(s => {
-      if (paidStudentIds.has(String(s._id)) || !(s.amount > 0)) return;
-      const startDate = (s.startDate || '').slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !inRange(startDate)) return;
-      rows.push({
-        _id: `est-${s._id}`, date: null, startDate,
-        studentName: s.name || '', className: s.className || '',
-        courseCategory: getCourseCategory(s.level), amount: s.amount,
-        note: '', estimated: true,
-      });
+  }
+  for (const pkg of scoped) {
+    const f = facts.get(String(pkg._id));
+    const diff = f.paid - f.paymentsTotal;
+    if (!diff) continue;
+    rows.push({
+      _id: `adj-${pkg._id}`, kind: 'manual',
+      date: null, closeDate: f.close.date,
+      studentName: students.get(String(pkg.studentId))?.name || '',
+      className: classNamesOf(pkg).join(' + '), courseCategory: categoryOfPackage(pkg),
+      amount: diff, note: '',
     });
+  }
+  rows.sort((a, b) => (b.date || b.closeDate).localeCompare(a.date || a.closeDate));
 
-    // Mới nhất trước. Dòng ước lượng không có ngày đóng nên xếp theo ngày khai giảng.
-    rows.sort((a, b) => (b.date || b.startDate || '').localeCompare(a.date || a.startDate || ''));
-
-    success(res, {
-      items: rows.slice((page - 1) * limit, page * limit),
-      total: rows.length,
-      totalAmount: rows.reduce((sum, r) => sum + r.amount, 0),
-      estimatedAmount: rows.reduce((sum, r) => sum + (r.estimated ? r.amount : 0), 0),
-      page, limit,
-    });
-  } catch (err) { next(err); }
+  success(res, {
+    items: rows.slice((page - 1) * limit, page * limit),
+    total: rows.length,
+    totalAmount: rows.reduce((s, r) => s + r.amount, 0),
+    manualAmount: rows.reduce((s, r) => s + (r.kind === 'manual' ? r.amount : 0), 0),
+    page, limit,
+  });
 };
 
-// GET /admin/revenue/new-contracts — DANH SÁCH học sinh khai giảng trong kỳ (học phí
-// ký mới), phân trang phía server. Lọc theo startDate giống hệt phần revenue của
-// getSummary. Ở đây phân trang được ngay trong DB vì chỉ đọc 1 collection.
-exports.getNewContractList = async (req, res, next) => {
-  try {
-    const { from, to } = req.query;
-    const page  = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 20));
-
-    const startDateCond = { $exists: true, $ne: '' };
-    if (from) startDateCond.$gte = from;
-    if (to)   startDateCond.$lte = to;
-    const filter = {
-      status: { $nin: ['dropped'] },
-      startDate: startDateCond,
-      $or: [{ coursePrice: { $gt: 0 } }, { amount: { $gt: 0 } }],
+// GET /admin/revenue/debts — gói chốt trong kỳ còn nợ, nợ nhiều nhất lên đầu.
+exports.getDebtList = async (req, res) => {
+  const { from, to } = req.query;
+  const { page, limit } = pageParams(req);
+  const { packages, facts } = await loadPackageData();
+  const scoped = closedInRange(packages, facts, from, to).filter(p => facts.get(String(p._id)).debt > 0);
+  const students = await studentMap(scoped.map(p => p.studentId), 'name phone');
+  const rows = scoped.map(p => {
+    const f = facts.get(String(p._id));
+    const s = students.get(String(p.studentId)) || {};
+    const names = classNamesOf(p);
+    return {
+      _id: String(p._id), studentId: String(p.studentId),
+      closeDate: f.close.date, estimated: f.close.estimated, startDate: earliestStart(p),
+      studentName: s.name || '', phone: s.phone || '',
+      className: names.join(' + '), classNames: names, courseCategory: categoryOfPackage(p),
+      contract: p.netTotal, paid: f.paid, remaining: f.debt, tuitionStatus: f.tuitionStatus,
     };
+  }).sort((a, b) => b.remaining - a.remaining);
 
-    // contractValue: học phí ký — coursePrice, rơi về amount khi chưa nhập học phí.
-    // Phải khớp đúng công thức revenue ở getSummary, nếu không tổng bảng sẽ lệch thẻ.
-    const contractValue = { $cond: [{ $gt: ['$coursePrice', 0] }, '$coursePrice', '$amount'] };
-
-    const [total, students, sums] = await Promise.all([
-      Student.countDocuments(filter),
-      Student.find(filter).select('name className level startDate coursePrice amount tuitionStatus')
-        .sort({ startDate: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-      Student.aggregate([
-        { $match: filter },
-        { $group: { _id: null, totalContract: { $sum: contractValue }, totalPaid: { $sum: '$amount' } } },
-      ]),
-    ]);
-
-    success(res, {
-      items: students.map(s => {
-        const contract = (s.coursePrice || 0) > 0 ? s.coursePrice : (s.amount || 0);
-        return {
-          _id: String(s._id), startDate: (s.startDate || '').slice(0, 10),
-          studentName: s.name || '', className: s.className || '',
-          courseCategory: getCourseCategory(s.level), level: s.level || '',
-          contract, paid: s.amount || 0,
-          remaining: Math.max(0, contract - (s.amount || 0)),
-          tuitionStatus: s.tuitionStatus || 'unpaid',
-        };
-      }),
-      total,
-      totalContract: sums[0]?.totalContract || 0,
-      totalPaid: sums[0]?.totalPaid || 0,
-      page, limit,
-    });
-  } catch (err) { next(err); }
+  success(res, {
+    items: rows.slice((page - 1) * limit, page * limit),
+    total: rows.length,
+    totalContract: rows.reduce((s, r) => s + r.contract, 0),
+    totalPaid: rows.reduce((s, r) => s + r.paid, 0),
+    totalRemaining: rows.reduce((s, r) => s + r.remaining, 0),
+    page, limit,
+  });
 };
+
+// Dùng cho dashboard: số liệu tháng hiện tại theo cùng quy tắc.
+exports.loadPackageData = loadPackageData;
 
 // GET /admin/revenue — manual target records (legacy)
 exports.getAll = async (req, res) => {

@@ -1,5 +1,5 @@
 const Class = require('../models/Class');
-const Student = require('../models/Student');
+const { activeStudentCountsByClass } = require('../utils/enrollment');
 const { success } = require('../utils/response');
 
 const dayLabel = (days) => (days || '').split(',').map(s => s.trim()).filter(Boolean).join('–');
@@ -18,13 +18,8 @@ exports.getAll = async (req, res) => {
     return 0;
   });
 
-  // Class.enrolled is a manually-edited field that easily goes stale — count real
-  // Student records instead, same as the admin class list already does.
-  const enrolledCounts = await Student.aggregate([
-    { $match: { className: { $in: classes.map(c => c.name) } } },
-    { $group: { _id: '$className', count: { $sum: 1 } } },
-  ]);
-  const enrolledMap = Object.fromEntries(enrolledCounts.map(e => [e._id, e.count]));
+  // Chỗ trống = sức chứa − học sinh đang học thật (không tính người đã nghỉ).
+  const enrolledMap = await activeStudentCountsByClass(classes.map(c => c._id));
 
   const monthMap = new Map();
   classes.forEach(c => {
@@ -32,7 +27,7 @@ exports.getAll = async (req, res) => {
     if (!c.startDate || isNaN(d.getTime())) return;
     const monthKey = `Tháng ${d.getMonth() + 1}/${d.getFullYear()}`;
     if (!monthMap.has(monthKey)) monthMap.set(monthKey, []);
-    const enrolled = enrolledMap[c.name] || 0;
+    const enrolled = enrolledMap[String(c._id)] || 0;
     monthMap.get(monthKey).push({
       name: c.course,
       date: `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`,

@@ -14,6 +14,12 @@ const {
 } = require('../utils/teacherLedger');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const Enrollment = require('../models/Enrollment');
+const {
+  activeStudentIdsOfClass, activeStudentIdsOfClasses, activeClassesByStudent,
+} = require('../utils/enrollment');
+const { assertRecordsBelong, rosterOf, classOfRecord } = require('./studentAttendanceController');
+const { belongsToClass, recordsOfClassesFilter, resolveClass } = require('../utils/classLink');
 
 // Everything in this controller derives its scope from req.teacherAccount
 // (set by protectTeacher) — never from client-supplied filters. A teacher can
@@ -27,30 +33,46 @@ const CLASS_FIELDS = 'name course days time capacity startDate endDate status co
 // status='substituted') — cần cộng thêm vào phạm vi truy cập lịch/lớp/điểm danh
 // bên dưới, để giáo viên dạy thay vẫn thấy đúng lịch dạy thay trong portal của họ
 // (Lớp của tôi, Lịch, điểm danh) — không chỉ được TÍNH LƯƠNG (xem getMySalary).
-async function substituteClassNames(teacherId) {
-  return TeacherSession.find({ status: 'substituted', substituteTeacherId: teacherId }).distinct('className');
+// Buổi dạy thay nối với lớp theo classId (bản ghi cũ chưa có classId thì theo tên).
+// Trả về lớp + ngày dạy thay cụ thể theo từng lớp (key = classId) — FE chỉ hiện ĐÚNG
+// (các) ngày dạy thay, không hiện cả lịch học định kỳ của lớp.
+async function substituteInfo(teacherId, select = CLASS_FIELDS) {
+  const rows = await TeacherSession.find({ status: 'substituted', substituteTeacherId: teacherId })
+    .select('classId className date').lean();
+  if (!rows.length) return { classes: [], ids: [], datesByClassId: {} };
+  const classes = await Class.find({
+    $or: [
+      { _id: { $in: rows.filter(r => r.classId).map(r => r.classId) } },
+      { name: { $in: rows.filter(r => !r.classId).map(r => r.className) } },
+    ],
+  }).select(select).lean();
+  const datesByClassId = {};
+  for (const r of rows) {
+    const cls = classes.find(c => belongsToClass(r, c));
+    if (cls) (datesByClassId[String(cls._id)] ||= []).push(r.date);
+  }
+  return { classes, ids: classes.map(c => c._id), datesByClassId };
 }
 
-// Ngày dạy thay cụ thể theo từng lớp — dùng để FE chỉ hiện ĐÚNG (các) ngày dạy
-// thay trên lịch/chi tiết lớp của giáo viên dạy thay, KHÔNG hiện cả lịch học
-// định kỳ cả lớp (họ không phải giáo viên chính, dạy thay chỉ 1-vài buổi lẻ).
-async function substituteDatesByClass(teacherId) {
-  const rows = await TeacherSession.find({ status: 'substituted', substituteTeacherId: teacherId }).select('className date');
-  return rows.reduce((acc, r) => { (acc[r.className] ||= []).push(r.date); return acc; }, {});
+// Lớp giáo viên được thao tác: lớp chính thức phụ trách hoặc lớp có dạy thay.
+async function findAccessibleClass(teacherId, { classId, className }, select = 'name') {
+  const cls = await resolveClass({ classId, className }, `${select} teacherId`);
+  if (!cls) return null;
+  if (String(cls.teacherId || '') === String(teacherId)) return cls;
+  const { ids } = await substituteInfo(teacherId, '_id name');
+  return ids.some(id => String(id) === String(cls._id)) ? cls : null;
 }
 
 exports.getMyClasses = async (req, res) => {
   const teacherId = req.teacherAccount.teacherId._id;
   const formalClasses = await Class.find({ teacherId }).select(CLASS_FIELDS).sort({ startDate: -1 }).lean();
-  const formalNames = new Set(formalClasses.map(c => c.name));
+  const formalIds = new Set(formalClasses.map(c => String(c._id)));
 
-  const subDates = await substituteDatesByClass(teacherId);
-  const subNames = Object.keys(subDates).filter(n => !formalNames.has(n));
-  let subClasses = [];
-  if (subNames.length) {
-    subClasses = await Class.find({ name: { $in: subNames } }).select(CLASS_FIELDS).sort({ startDate: -1 }).lean();
-    subClasses = subClasses.map(c => ({ ...c, substituteDates: subDates[c.name] }));
-  }
+  const sub = await substituteInfo(teacherId);
+  const subClasses = sub.classes
+    .filter(c => !formalIds.has(String(c._id)))
+    .sort((a, b) => String(b.startDate || '').localeCompare(String(a.startDate || '')))
+    .map(c => ({ ...c, substituteDates: sub.datesByClassId[String(c._id)] }));
   success(res, [...formalClasses, ...subClasses]);
 };
 
@@ -59,72 +81,83 @@ exports.getMyClass = async (req, res, next) => {
   const formal = await Class.findOne({ _id: req.params.id, teacherId }).select(CLASS_FIELDS).lean();
   if (formal) return success(res, formal);
 
-  const subDates = await substituteDatesByClass(teacherId);
-  const cls = await Class.findOne({ _id: req.params.id, name: { $in: Object.keys(subDates) } }).select(CLASS_FIELDS).lean();
+  const sub = await substituteInfo(teacherId);
+  const cls = sub.classes.find(c => String(c._id) === String(req.params.id));
   // 404, not 403 — don't confirm the class exists if it isn't theirs.
   if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
-  success(res, { ...cls, substituteDates: subDates[cls.name] });
+  success(res, { ...cls, substituteDates: sub.datesByClassId[String(cls._id)] });
 };
 
-// Tên các lớp giáo viên đang dạy — dùng làm phạm vi truy cập cho toàn bộ các
-// hàm bên dưới liên quan tới học sinh/tài khoản học sinh của giáo viên này.
-async function myClassNames(teacherId) {
-  const classes = await Class.find({ teacherId }).select('name');
-  return classes.map(c => c.name);
+// Các lớp giáo viên đang dạy — phạm vi truy cập cho toàn bộ hàm liên quan tới học sinh
+// và tài khoản học sinh bên dưới.
+async function myClasses(teacherId) {
+  return Class.find({ teacherId }).select('_id name').lean();
 }
 
-// Xác nhận 1 học sinh thuộc lớp giáo viên này đang dạy — trả về null nếu
-// không thuộc (dùng để chặn giáo viên sửa/xem học sinh của lớp khác).
+// Học sinh thuộc giáo viên khi có ghi danh ĐANG HỌC ở một lớp giáo viên dạy.
 async function assertOwnStudent(teacherId, studentId) {
-  const classNames = await myClassNames(teacherId);
-  return Student.findOne({ _id: studentId, className: { $in: classNames } });
+  const classIds = (await myClasses(teacherId)).map(c => c._id);
+  const owns = await Enrollment.exists({ studentId, classId: { $in: classIds }, status: 'active' });
+  return owns ? Student.findById(studentId) : null;
 }
 
-// Toàn bộ học sinh thuộc các lớp giáo viên đang dạy (dùng cho tab "Quản lý học
-// sinh") — giáo viên được xem/sửa thông tin cơ bản + ghi chú (không có
-// học phí/số tiền — vẫn giữ riêng cho admin).
+// Gắn tên các lớp (chỉ lớp của giáo viên này) vào từng học sinh. Giữ className dạng
+// chuỗi nối để giao diện cũ vẫn đọc được; classNames là mảng đầy đủ.
+async function withTeacherClassNames(students, classIds) {
+  const map = await activeClassesByStudent(students.map(s => s._id), { classIds });
+  return students.map(s => {
+    const names = (map.get(String(s._id)) || []).map(c => c.className).filter(Boolean);
+    return { ...s, classNames: names, className: names.join(' + ') };
+  });
+}
+
+// Toàn bộ học sinh thuộc các lớp giáo viên đang dạy (tab "Quản lý học sinh") — không có
+// học phí/số tiền, vẫn là dữ liệu riêng của admin.
 exports.getMyStudents = async (req, res) => {
   const teacherId = req.teacherAccount.teacherId._id;
-  const classNames = await myClassNames(teacherId);
-  const students = await Student.find({ className: { $in: classNames } }).select('name phone email className status note').sort({ name: 1 });
-  success(res, students);
+  const classIds = (await myClasses(teacherId)).map(c => c._id);
+  const ids = await activeStudentIdsOfClasses(classIds);
+  const students = await Student.find({ _id: { $in: ids } }).select('name phone email status note').sort({ name: 1 }).lean();
+  success(res, await withTeacherClassNames(students, classIds));
 };
 
-// Giáo viên chỉ được sửa ghi chú của học sinh lớp mình — KHÔNG được sửa họ
-// tên/SĐT/email (đổi hồ sơ) hay học phí/số tiền/chuyển lớp (vẫn là nghiệp vụ
-// riêng của admin). Body có gửi kèm name/phone/email cũng bị bỏ qua, không lưu.
+// Giáo viên chỉ được sửa ghi chú của học sinh lớp mình.
 exports.updateMyStudent = async (req, res, next) => {
   const teacherId = req.teacherAccount.teacherId._id;
   const student = await assertOwnStudent(teacherId, req.params.id);
   if (!student) return next(new AppError('Không tìm thấy học sinh', 404));
-
   const { note } = req.body;
   const body = {};
   if (note !== undefined) body.note = note;
-
   const updated = await Student.findByIdAndUpdate(req.params.id, body, { new: true, runValidators: true })
-    .select('name phone email className status note');
-  success(res, updated, 'Cập nhật thành công');
+    .select('name phone email status note').lean();
+  const classIds = (await myClasses(teacherId)).map(c => c._id);
+  const [view] = await withTeacherClassNames([updated], classIds);
+  success(res, view, 'Cập nhật thành công');
 };
+
+// Account populate chỉ lấy tên; tên lớp gắn thêm từ ghi danh.
+async function accountView(account, classIds) {
+  const obj = account.toObject();
+  obj.passwordPlain = account.getPlainPassword();
+  delete obj.passwordPlainEnc;
+  if (obj.studentId && obj.studentId._id) {
+    const [s] = await withTeacherClassNames([obj.studentId], classIds);
+    obj.studentId = s;
+  }
+  return obj;
+}
 
 // ── Tài khoản đăng nhập của học sinh — giáo viên được xem/tạo/reset mật khẩu/
 // khoá, scoped theo đúng học sinh thuộc lớp mình dạy. Không có hàm xoá (giống
 // admin) — chỉ khoá (isActive=false), giữ nguyên lịch sử điểm/học phí.
 exports.getMyStudentAccounts = async (req, res) => {
   const teacherId = req.teacherAccount.teacherId._id;
-  const classNames = await myClassNames(teacherId);
-  const students = await Student.find({ className: { $in: classNames } }).select('_id');
-  const studentIds = students.map(s => s._id);
-
+  const classIds = (await myClasses(teacherId)).map(c => c._id);
+  const studentIds = await activeStudentIdsOfClasses(classIds);
   const accounts = await Account.find({ studentId: { $in: studentIds }, role: 'student' })
-    .select('-password +passwordPlainEnc').populate('studentId', 'name className');
-  const result = accounts.map(a => {
-    const obj = a.toObject();
-    obj.passwordPlain = a.getPlainPassword();
-    delete obj.passwordPlainEnc;
-    return obj;
-  });
-  success(res, result);
+    .select('-password +passwordPlainEnc').populate('studentId', 'name');
+  success(res, await Promise.all(accounts.map(a => accountView(a, classIds))));
 };
 
 exports.createMyStudentAccount = async (req, res, next) => {
@@ -140,11 +173,9 @@ exports.createMyStudentAccount = async (req, res, next) => {
   if (existing) return next(new AppError('Học viên này đã có tài khoản', 400));
 
   const account = await Account.create({ studentId, username, password, role: 'student' });
-  const safe = await Account.findById(account._id).select('-password +passwordPlainEnc').populate('studentId', 'name className');
-  const obj = safe.toObject();
-  obj.passwordPlain = safe.getPlainPassword();
-  delete obj.passwordPlainEnc;
-  success(res, obj, 'Tạo tài khoản thành công', 201);
+  const safe = await Account.findById(account._id).select('-password +passwordPlainEnc').populate('studentId', 'name');
+  const classIds = (await myClasses(teacherId)).map(c => c._id);
+  success(res, await accountView(safe, classIds), 'Tạo tài khoản thành công', 201);
 };
 
 exports.resetMyStudentAccountPassword = async (req, res, next) => {
@@ -176,11 +207,9 @@ exports.updateMyStudentAccount = async (req, res, next) => {
   if (isActive !== undefined) body.isActive = isActive;
 
   const updated = await Account.findByIdAndUpdate(req.params.id, body, { new: true, runValidators: true })
-    .select('-password +passwordPlainEnc').populate('studentId', 'name className');
-  const obj = updated.toObject();
-  obj.passwordPlain = updated.getPlainPassword();
-  delete obj.passwordPlainEnc;
-  success(res, obj, 'Cập nhật thành công');
+    .select('-password +passwordPlainEnc').populate('studentId', 'name');
+  const classIds = (await myClasses(teacherId)).map(c => c._id);
+  success(res, await accountView(updated, classIds), 'Cập nhật thành công');
 };
 
 // Roster for taking attendance — name only, never the admin-facing fields
@@ -190,10 +219,10 @@ exports.updateMyStudentAccount = async (req, res, next) => {
 // trong buổi đầu; sau khi học sinh tự đổi, giáo viên không còn xem được nữa.
 exports.getClassStudents = async (req, res, next) => {
   const teacherId = req.teacherAccount.teacherId._id;
-  const subNames = await substituteClassNames(teacherId);
-  const cls = await Class.findOne({ _id: req.params.id, $or: [{ teacherId }, { name: { $in: subNames } }] }).select('name');
+  const cls = await findAccessibleClass(teacherId, { classId: req.params.id });
   if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
-  const students = await Student.find({ className: cls.name, status: 'active' }).select('name').sort({ name: 1 });
+  const rosterIds = await activeStudentIdsOfClass(cls._id);
+  const students = await Student.find({ _id: { $in: rosterIds } }).select('name').sort({ name: 1 });
 
   const accounts = await Account.find({ studentId: { $in: students.map(s => s._id) }, role: 'student' })
     .select({ studentId: 1, username: 1, mustChangePassword: 1, passwordPlainEnc: 1 });
@@ -233,12 +262,11 @@ exports.getMyReferrals = async (req, res, next) => {
 
 exports.getMyAttendance = async (req, res, next) => {
   const teacherId = req.teacherAccount.teacherId._id;
-  const filter = { teacherId };
+  let filter = { teacherId };
   if (req.query.classId) {
-    const subNames = await substituteClassNames(teacherId);
-    const cls = await Class.findOne({ _id: req.query.classId, $or: [{ teacherId }, { name: { $in: subNames } }] }).select('name');
+    const cls = await findAccessibleClass(teacherId, { classId: req.query.classId });
     if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
-    filter.className = cls.name;
+    filter = { teacherId, ...recordsOfClassesFilter([cls]) };
   }
   const sessions = await StudentAttendance.find(filter).sort({ date: -1 });
   success(res, sessions);
@@ -246,19 +274,16 @@ exports.getMyAttendance = async (req, res, next) => {
 
 exports.createAttendance = async (req, res, next) => {
   const teacherId = req.teacherAccount.teacherId._id;
-  const { className, date, sessionNum, note, records } = req.body;
+  const { classId, className, date, sessionNum, note, records } = req.body;
 
-  const subNames = await substituteClassNames(teacherId);
-  const cls = await Class.findOne({ name: className, $or: [{ teacherId }, { name: { $in: subNames } }] });
+  const cls = await findAccessibleClass(teacherId, { classId, className });
   if (!cls) return next(new AppError('Lớp học không thuộc quyền quản lý của bạn', 403));
 
   let finalRecords = records;
-  if (!finalRecords || finalRecords.length === 0) {
-    const students = await Student.find({ className, status: 'active' });
-    finalRecords = students.map(s => ({ studentId: s._id, studentName: s.name, status: 'present', note: '' }));
-  }
+  if (!finalRecords || finalRecords.length === 0) finalRecords = await rosterOf(cls._id);
+  else await assertRecordsBelong(cls._id, finalRecords);
 
-  const session = await StudentAttendance.create({ className, teacherId, date, sessionNum: sessionNum || 1, note: note || '', records: finalRecords });
+  const session = await StudentAttendance.create({ classId: cls._id, className: cls.name, teacherId, date, sessionNum: sessionNum || 1, note: note || '', records: finalRecords });
   success(res, session, 'Tạo buổi điểm danh thành công', 201);
 };
 
@@ -273,7 +298,11 @@ exports.updateAttendance = async (req, res, next) => {
   if (date !== undefined) body.date = date;
   if (sessionNum !== undefined) body.sessionNum = sessionNum;
   if (note !== undefined) body.note = note;
-  if (records !== undefined) body.records = records;
+  if (records !== undefined) {
+    const cls = await classOfRecord(existing);
+    if (cls) await assertRecordsBelong(cls._id, records, existing.records);
+    body.records = records;
+  }
 
   const session = await StudentAttendance.findByIdAndUpdate(req.params.id, body, { new: true });
   success(res, session, 'Cập nhật thành công');
@@ -299,17 +328,12 @@ exports.getMySalary = async (req, res) => {
   // Lớp giáo viên này KHÔNG hề phụ trách nhưng có dạy thay 1 buổi ở đó (ngoại lệ 1
   // buổi qua "Phân công dạy thay", không đụng teacherAssignments) — vẫn cần lấy về
   // classInfo (đặc biệt ratePerSession) mới tính được tiền cho buổi dạy thay đó.
-  const classNames = classes.map(c => c.name);
-  const subClassNames = await TeacherSession.find({ status: 'substituted', substituteTeacherId: teacherId }).distinct('className');
-  const missingClassNames = subClassNames.filter(n => !classNames.includes(n));
-  if (missingClassNames.length) {
-    const extraClasses = await Class.find({ name: { $in: missingClassNames } }).select(classSelect).lean();
-    classes = classes.concat(extraClasses);
-  }
-  const allClassNames = classes.map(c => c.name);
+  const knownIds = new Set(classes.map(c => String(c._id)));
+  const sub = await substituteInfo(teacherId, classSelect);
+  classes = classes.concat(sub.classes.filter(c => !knownIds.has(String(c._id))));
 
   const [overrides, bonuses, commissions, payments] = await Promise.all([
-    TeacherSession.find({ className: { $in: allClassNames } }).select('className date status teacherName substituteTeacherId substituteRate').lean(),
+    TeacherSession.find(recordsOfClassesFilter(classes)).select('classId className date status teacherName substituteTeacherId substituteRate').lean(),
     TeacherBonus.find({ teacherId }).select('type amount date className note').lean(),
     ReferralCommission.find({ referrerModel: 'Teacher', referrerId: teacherId })
       .populate('referredStudentId', 'name').select('amount createdAt referredStudentId').lean(),

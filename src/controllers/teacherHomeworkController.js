@@ -5,6 +5,7 @@ const HomeworkAssignment = require('../models/HomeworkAssignment');
 const HomeworkSubmission = require('../models/HomeworkSubmission');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const Enrollment = require('../models/Enrollment');
 const { deleteManyFromBlob, staleMediaPaths } = require('../utils/uploadHandlers');
 
 const myTeacherId = (req) => req.teacherAccount.teacherId._id;
@@ -13,6 +14,20 @@ const myTeacherId = (req) => req.teacherAccount.teacherId._id;
 async function assertOwnClass(teacherId, classId) {
   const cls = await Class.findOne({ _id: classId, teacherId });
   return cls || null;
+}
+
+// Học sinh được giao đích danh phải đang học đúng lớp của bài (trước đây không kiểm).
+// keep = học sinh đã được giao từ trước (sửa bài cũ của người nay đã nghỉ vẫn lưu được).
+async function assertStudentsInClass(classId, studentIds, keep = []) {
+  if (!Array.isArray(studentIds) || studentIds.length === 0) return [];
+  const unique = [...new Set(studentIds.map(String))];
+  const kept = new Set(keep.map(String));
+  const toCheck = unique.filter(id => !kept.has(id));
+  if (toCheck.length) {
+    const ok = await Enrollment.distinct('studentId', { classId, status: 'active', studentId: { $in: toCheck } });
+    if (ok.length !== toCheck.length) throw new AppError('Có học sinh không thuộc lớp này', 400);
+  }
+  return unique;
 }
 
 // ─── Ngân hàng câu hỏi (riêng từng giảng viên) ──────────────────────────────
@@ -156,7 +171,7 @@ exports.createAssignment = async (req, res, next) => {
   if (new Date(endAt) <= new Date(openAt)) return next(new AppError('Giờ đóng phải sau giờ mở', 400));
   const a = await HomeworkAssignment.create({
     teacherId, classId, lessonDate, paperId: paperId || null, questions,
-    studentIds: Array.isArray(studentIds) ? studentIds : [],
+    studentIds: await assertStudentsInClass(classId, studentIds),
     openAt, endAt, timerMinutes: timerMinutes || null, maxAttempts: maxAttempts || 1,
   });
   success(res, a, 'Giao bài thành công', 201);
@@ -203,7 +218,10 @@ exports.updateAssignment = async (req, res, next) => {
   if (endAt !== undefined) a.endAt = endAt;
   if (timerMinutes !== undefined) a.timerMinutes = timerMinutes;
   if (maxAttempts !== undefined) a.maxAttempts = maxAttempts;
-  if (studentIds !== undefined) a.studentIds = studentIds;
+  if (studentIds !== undefined) {
+    const keep = classId !== undefined ? [] : (a.studentIds || []);
+    a.studentIds = await assertStudentsInClass(a.classId, studentIds, keep);
+  }
   if (new Date(a.endAt) <= new Date(a.openAt)) return next(new AppError('Giờ đóng phải sau giờ mở', 400));
   await a.save();
   success(res, a, 'Cập nhật thành công');

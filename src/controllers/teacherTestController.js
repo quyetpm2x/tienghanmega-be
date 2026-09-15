@@ -8,6 +8,7 @@ const { sameIndexSet, resolveGrading } = require('../utils/testScoring');
 const { effectiveStatus } = require('../utils/testSessionStatus');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { activeStudentIdsOfClass } = require('../utils/enrollment');
 
 // Giáo viên chỉ được thao tác trên các lớp mình dạy — mọi hàm bên dưới đều
 // xác nhận lại quyền sở hữu lớp qua Class.teacherId trước khi đọc/ghi.
@@ -109,7 +110,12 @@ exports.getSessionResults = async (req, res, next) => {
   const owns = await assertOwnClass(teacherId, session.classId);
   if (!owns) return next(new AppError('Không tìm thấy phiên kiểm tra', 404));
 
-  const students = await Student.find({ classId: session.classId }).select('name').sort({ name: 1 });
+  // Danh sách = học sinh đang học lớp + học sinh đã có bài làm (người đã nghỉ vẫn phải
+  // thấy kết quả cũ). Trước đây lấy theo Student.classId nên người học lớp này ở gói
+  // thứ hai bị thiếu.
+  const rosterIds = await activeStudentIdsOfClass(session.classId);
+  const attemptedIds = await TestAttempt.distinct('studentId', { sessionId: session._id });
+  const students = await Student.find({ _id: { $in: [...rosterIds, ...attemptedIds] } }).select('name').sort({ name: 1 });
   // 1 học sinh có thể có nhiều attempt cho cùng phiên (mỗi lần làm lại là 1
   // document riêng) — gom theo studentId, sắp theo attemptCount để lấy lần mới
   // nhất làm đại diện chính, đồng thời giữ nguyên cả danh sách cho FE chọn xem theo từng lần.

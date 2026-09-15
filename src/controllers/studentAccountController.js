@@ -1,4 +1,5 @@
 const Account = require('../models/Account');
+const { activeClassesByStudent } = require('../utils/enrollment');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
@@ -8,16 +9,26 @@ const AppError = require('../utils/AppError');
 // được xoá, để giữ nguyên lịch sử điểm/học phí gắn với tài khoản.
 // `passwordPlain` (mật khẩu hiện tại, giải mã) chỉ dành cho admin xem lại —
 // route này nằm dưới /admin/* (đã được protect() bảo vệ ở routes/admin/index.js).
-function withPlainPassword(account) {
-  const obj = account.toObject();
-  obj.passwordPlain = account.getPlainPassword();
-  delete obj.passwordPlainEnc;
-  return obj;
+async function withPlainPassword(accounts) {
+  const list = Array.isArray(accounts) ? accounts : [accounts];
+  const studentIds = list.map(a => a.studentId && a.studentId._id).filter(Boolean);
+  const classes = await activeClassesByStudent(studentIds);
+  const out = list.map(account => {
+    const obj = account.toObject();
+    obj.passwordPlain = account.getPlainPassword();
+    delete obj.passwordPlainEnc;
+    if (obj.studentId && obj.studentId._id) {
+      const names = (classes.get(String(obj.studentId._id)) || []).map(c => c.className).filter(Boolean);
+      obj.studentId = { ...obj.studentId, classNames: names, className: names.join(' + ') };
+    }
+    return obj;
+  });
+  return Array.isArray(accounts) ? out : out[0];
 }
 
 exports.getAll = async (req, res) => {
-  const accounts = await Account.find({ role: 'student' }).select('-password +passwordPlainEnc').populate('studentId', 'name className').sort({ createdAt: -1 });
-  success(res, accounts.map(withPlainPassword));
+  const accounts = await Account.find({ role: 'student' }).select('-password +passwordPlainEnc').populate('studentId', 'name').sort({ createdAt: -1 });
+  success(res, await withPlainPassword(accounts));
 };
 
 exports.create = async (req, res, next) => {
@@ -29,8 +40,8 @@ exports.create = async (req, res, next) => {
   if (existing) return next(new AppError('Học viên này đã có tài khoản', 400));
 
   const account = await Account.create({ studentId, username, password, role: 'student' });
-  const safe = await Account.findById(account._id).select('-password +passwordPlainEnc').populate('studentId', 'name className');
-  success(res, withPlainPassword(safe), 'Tạo tài khoản thành công', 201);
+  const safe = await Account.findById(account._id).select('-password +passwordPlainEnc').populate('studentId', 'name');
+  success(res, await withPlainPassword(safe), 'Tạo tài khoản thành công', 201);
 };
 
 exports.resetPassword = async (req, res, next) => {
@@ -52,7 +63,7 @@ exports.update = async (req, res, next) => {
   if (username !== undefined) body.username = username;
   if (isActive !== undefined) body.isActive = isActive;
 
-  const account = await Account.findOneAndUpdate({ _id: req.params.id, role: 'student' }, body, { new: true, runValidators: true }).select('-password +passwordPlainEnc').populate('studentId', 'name className');
+  const account = await Account.findOneAndUpdate({ _id: req.params.id, role: 'student' }, body, { new: true, runValidators: true }).select('-password +passwordPlainEnc').populate('studentId', 'name');
   if (!account) return next(new AppError('Không tìm thấy tài khoản', 404));
-  success(res, withPlainPassword(account), 'Cập nhật thành công');
+  success(res, await withPlainPassword(account), 'Cập nhật thành công');
 };

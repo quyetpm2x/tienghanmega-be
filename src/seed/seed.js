@@ -10,6 +10,11 @@ const Student = require('../models/Student');
 const Revenue = require('../models/Revenue');
 const Registration = require('../models/Registration');
 const TeacherSession = require('../models/TeacherSession');
+const Payment = require('../models/Payment');
+const EnrollmentPackage = require('../models/EnrollmentPackage');
+const Enrollment = require('../models/Enrollment');
+const ReferralCommission = require('../models/ReferralCommission');
+const { categoryOf } = require('../utils/courseCategory');
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -83,8 +88,19 @@ async function seed() {
   await connectDB();
   console.log('Connected to MongoDB');
 
+  // Seed XOÁ SẠCH dữ liệu — tuyệt đối không được chạy vào production.
+  if (/product/i.test(mongoose.connection.name)) {
+    console.error(`⛔ Từ chối seed vào database "${mongoose.connection.name}" (production).`);
+    await mongoose.disconnect();
+    process.exit(1);
+  }
+
   // Clear all collections
   await Promise.all([
+    Payment.deleteMany({}),
+    EnrollmentPackage.deleteMany({}),
+    Enrollment.deleteMany({}),
+    ReferralCommission.deleteMany({}),
     Admin.deleteMany({}),
     Course.deleteMany({}),
     Teacher.deleteMany({}),
@@ -174,7 +190,24 @@ async function seed() {
     ...s,
     classId: classMap[s.className] || null,
   }));
-  await Student.insertMany(studentsWithClassId);
+  const insertedStudents = await Student.insertMany(studentsWithClassId);
+  // Mỗi học sinh mẫu một gói một khoá. Dữ liệu mẫu không có học phí nên lấy học phí =
+  // số đã đóng, và ghi số đã đóng vào paidAdjustment (seed không tạo Payment).
+  for (let i = 0; i < insertedStudents.length; i++) {
+    const s = insertedStudents[i];
+    const src = studentsWithClassId[i];
+    const price = src.amount || 0;
+    const pkg = await EnrollmentPackage.create({
+      studentId: s._id, listTotal: price, discount: 0, netTotal: price, paidAdjustment: price,
+    });
+    await Enrollment.create({
+      studentId: s._id, packageId: pkg._id,
+      classId: src.classId, className: src.className,
+      courseTitle: src.level || '', courseCategory: categoryOf(src.level),
+      listPrice: price, discountShare: 0, netPrice: price,
+      startDate: src.startDate || '', status: 'active',
+    });
+  }
 
   // Attendance
   const sessionData = [

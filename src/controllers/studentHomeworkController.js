@@ -1,4 +1,4 @@
-const Student = require('../models/Student');
+const { activeClassIdsOfStudent } = require('../utils/enrollment');
 const HomeworkAssignment = require('../models/HomeworkAssignment');
 const HomeworkSubmission = require('../models/HomeworkSubmission');
 const { success } = require('../utils/response');
@@ -15,29 +15,35 @@ function answerImages(a) {
 // Đệm trễ cho phép khi nộp bài — bù thời gian request đi trên mạng (giống hệ Test).
 const SUBMIT_GRACE_MS = 20 * 1000;
 
-async function myClassId(req) {
-  const student = await Student.findById(req.studentAccount.studentId._id).select('classId');
-  return student?.classId || null;
+// Các lớp học sinh đang học — một học sinh có thể học nhiều lớp cùng lúc.
+function myClassIds(req) {
+  return activeClassIdsOfStudent(req.studentAccount.studentId._id);
 }
 
-function eligibleFor(assignment, studentId) {
+// Được giao khi: bài thuộc một lớp học sinh đang học VÀ (giao cả lớp hoặc có tên học
+// sinh). Trước đây không kiểm lớp — biết mã bài là mở được BTVN của lớp khác.
+function eligibleFor(assignment, studentId, classIds) {
+  const assignmentClass = String(assignment.classId && assignment.classId._id ? assignment.classId._id : assignment.classId);
+  if (!classIds.some(c => String(c) === assignmentClass)) return false;
   return assignment.studentIds.length === 0 || assignment.studentIds.some(id => String(id) === String(studentId));
 }
 
-// Danh sách BTVN của lớp học sinh, kèm trạng thái làm bài mới nhất của chính mình.
+// Danh sách BTVN của mọi lớp đang học, kèm tên lớp và trạng thái làm bài mới nhất.
 exports.getAssignments = async (req, res) => {
-  const classId = await myClassId(req);
-  if (!classId) return success(res, []);
+  const classIds = await myClassIds(req);
+  if (!classIds.length) return success(res, []);
   const studentId = req.studentAccount.studentId._id;
-  const assignments = await HomeworkAssignment.find({ classId }).sort({ openAt: -1 });
-  const visible = assignments.filter(a => eligibleFor(a, studentId));
+  const assignments = await HomeworkAssignment.find({ classId: { $in: classIds } })
+    .populate('classId', 'name').sort({ openAt: -1 });
+  const visible = assignments.filter(a => eligibleFor(a, studentId, classIds));
   const submissions = await HomeworkSubmission.find({
     assignmentId: { $in: visible.map(a => a._id) }, studentId,
   }).select('-answers').sort({ attemptCount: 1 });
   const subMap = new Map();
   for (const s of submissions) subMap.set(String(s.assignmentId), s); // giữ lần cuối cùng (mới nhất)
   success(res, visible.map(a => ({
-    _id: a._id, classId: a.classId, lessonDate: a.lessonDate, openAt: a.openAt, endAt: a.endAt,
+    _id: a._id, classId: a.classId?._id || a.classId, className: a.classId?.name || '',
+    lessonDate: a.lessonDate, openAt: a.openAt, endAt: a.endAt,
     timerMinutes: a.timerMinutes, maxAttempts: a.maxAttempts, questionCount: a.questions.length,
     mySubmission: subMap.get(String(a._id)) || null,
   })));
@@ -47,7 +53,8 @@ exports.startAssignment = async (req, res, next) => {
   const studentId = req.studentAccount.studentId._id;
   const assignment = await HomeworkAssignment.findById(req.params.id).populate('questions.questionId');
   if (!assignment) return next(new AppError('Không tìm thấy bài tập', 404));
-  if (!eligibleFor(assignment, studentId)) return next(new AppError('Bạn không được giao bài tập này', 403));
+  const classIds = await myClassIds(req);
+  if (!eligibleFor(assignment, studentId, classIds)) return next(new AppError('Bạn không được giao bài tập này', 403));
   const now = Date.now();
   if (now < new Date(assignment.openAt).getTime()) return next(new AppError('Bài tập chưa mở', 400));
   if (now > new Date(assignment.endAt).getTime()) return next(new AppError('Bài tập đã hết hạn nộp', 400));
@@ -223,12 +230,14 @@ exports.getSubmission = async (req, res, next) => {
 
 // Badge tổng hợp cho nav Student Portal.
 exports.getHomeworkNotifications = async (req, res) => {
-  const classId = await myClassId(req);
+  const classIds = await myClassIds(req);
   const studentId = req.studentAccount.studentId._id;
-  if (!classId) return success(res, { newAssignments: 0, newGrades: 0, newReplies: 0 });
   const now = new Date();
-  const assignments = await HomeworkAssignment.find({ classId, openAt: { $lte: now }, endAt: { $gte: now } });
-  const visible = assignments.filter(a => eligibleFor(a, studentId));
+  // Không return sớm khi chưa học lớp nào: điểm và phản hồi cho bài CŨ vẫn phải báo.
+  const assignments = classIds.length
+    ? await HomeworkAssignment.find({ classId: { $in: classIds }, openAt: { $lte: now }, endAt: { $gte: now } })
+    : [];
+  const visible = assignments.filter(a => eligibleFor(a, studentId, classIds));
   const started = await HomeworkSubmission.find({ assignmentId: { $in: visible.map(a => a._id) }, studentId }).select('assignmentId');
   const startedSet = new Set(started.map(s => String(s.assignmentId)));
   const newAssignments = visible.filter(a => !startedSet.has(String(a._id))).length;
