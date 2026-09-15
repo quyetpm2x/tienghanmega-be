@@ -27,3 +27,24 @@ test('dạy thay: buổi chuyển sang giáo viên dạy thay, đơn giá tra th
   const sub = buildTeacherLedger({ ...base, teacherId: 't2', overrides });
   assert.equal(total(sub), 200000, 'giáo viên dạy thay nhận đơn giá lớp');
 });
+
+test('nhiều bản ghi cùng lớp + ngày: bản cập nhật gần nhất thắng, không phụ thuộc thứ tự', () => {
+  const older = { _id: 'x1', classId: 'c1', className: 'VIP200426', date: '2026-09-14', status: 'not-taught', updatedAt: '2026-06-01T00:00:00Z' };
+  const newer = { _id: 'x2', classId: 'c1', className: 'VIP200426 - Mango', date: '2026-09-14', status: 'rescheduled', updatedAt: '2026-07-20T00:00:00Z' };
+  assert.equal(total(buildTeacherLedger({ ...base, overrides: [older, newer] })), 600000, 'dời lịch vẫn tính tiền');
+  assert.equal(total(buildTeacherLedger({ ...base, overrides: [newer, older] })), 600000, 'đảo thứ tự vẫn ra cùng số');
+  // Bản mới nhất là "đã dạy" thì bản "không dạy" cũ hơn không còn hiệu lực
+  const taught = { ...newer, _id: 'x3', status: 'taught', updatedAt: '2026-08-01T00:00:00Z' };
+  assert.equal(total(buildTeacherLedger({ ...base, overrides: [older, taught] })), 600000);
+  // Bản mới nhất là "không dạy" thì bị trừ, dù bản cũ hơn là dạy thay
+  const sub = { ...older, _id: 'x4', status: 'substituted', substituteTeacherId: 't2', updatedAt: '2026-05-01T00:00:00Z' };
+  const nt = { ...older, _id: 'x5', updatedAt: '2026-08-02T00:00:00Z' };
+  assert.equal(total(buildTeacherLedger({ ...base, overrides: [sub, nt] })), 400000);
+  assert.equal(total(buildTeacherLedger({ ...base, teacherId: 't2', overrides: [sub, nt] })), 0, 'bản dạy thay cũ không còn hiệu lực');
+});
+
+test('tuỳ chọn latestWins=false giữ cách cũ (lấy bản đầu tiên) — chỉ để báo cáo so sánh', () => {
+  const a = { classId: 'c1', className: 'X', date: '2026-09-14', status: 'not-taught', updatedAt: '2026-06-01T00:00:00Z' };
+  const b = { classId: 'c1', className: 'X', date: '2026-09-14', status: 'rescheduled', updatedAt: '2026-07-20T00:00:00Z' };
+  assert.equal(total(buildTeacherLedger({ ...base, overrides: [a, b], latestWins: false })), 400000);
+});

@@ -97,4 +97,17 @@ function buildClassLinkPlan({ classes, students, enrollments, attendances, sessi
   };
 }
 
-module.exports = { buildClassLinkPlan };
+// Lệnh bulkWrite cho một kế hoạch nối lớp. Chỉ ghi nếu tên trên bản ghi vẫn như lúc lập (có ai
+// vừa sửa thì bỏ qua, lần chạy sau sẽ tính lại). timestamps: false — nối lớp không phải "sửa buổi
+// dạy": nếu để Mongoose đè updatedAt, mọi bản ghi mang cùng một giờ sửa và mất thứ tự sửa thật.
+function classLinkBulkOps(updates) {
+  return updates.map(u => ({
+    updateOne: {
+      filter: { _id: u._id, className: u.from },
+      update: { $set: { classId: u.classId, className: u.className } },
+      timestamps: false,
+    },
+  }));
+}
+
+module.exports = { buildClassLinkPlan, classLinkBulkOps };

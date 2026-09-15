@@ -62,7 +62,32 @@ function effectiveAssignments(c) {
 // đoạn thời gian họ phụ trách lớp đó (không tính buổi trước/sau khi đổi giáo viên).
 // status==='substituted' loại buổi đó khỏi số buổi của giáo viên GỐC (không phải họ
 // dạy) — xem thêm pass thứ 2 bên dưới, cộng buổi đó ngược lại cho giáo viên DẠY THAY.
-function buildTeacherSessions(teacherId, classes, overrides, todayStr) {
+// Thời điểm "sửa sau cùng" của một bản ghi buổi dạy (updatedAt, rồi createdAt, rồi thời
+// điểm tạo nằm trong ObjectId).
+function editedAt(s) {
+  const t = s.updatedAt || s.createdAt;
+  if (t) return new Date(t).getTime();
+  const id = String(s._id || '');
+  return /^[0-9a-f]{24}$/i.test(id) ? parseInt(id.slice(0, 8), 16) * 1000 : 0;
+}
+
+// Mỗi (lớp, ngày) chỉ một bản ghi có hiệu lực: bản sửa gần nhất. Dữ liệu cũ có thể có nhiều
+// bản cho cùng lớp + ngày (sinh ra khi lớp đổi tên — tìm theo tên không thấy nên tạo thêm).
+// Lấy "bản đầu tiên tìm thấy" thì kết quả phụ thuộc thứ tự trả về → lương admin và lương
+// giảng viên tự xem có thể lệch nhau. PHẢI giống tienhanmega-fe/lib/teacherSchedule.ts.
+function latestPerClassDate(overrides, classes) {
+  const best = new Map();
+  for (const s of overrides) {
+    const cls = classes.find((c) => belongsToClass(s, c));
+    const key = `${cls ? cls._id : `name:${s.className}`}__${s.date}`;
+    const cur = best.get(key);
+    if (!cur || editedAt(s) >= editedAt(cur)) best.set(key, s);
+  }
+  return [...best.values()];
+}
+
+function buildTeacherSessions(teacherId, classes, allOverrides, todayStr, { latestWins = true } = {}) {
+  const overrides = latestWins ? latestPerClassDate(allOverrides, classes) : allOverrides;
   const result = [];
   classes.forEach((c) => {
     const segments = effectiveAssignments(c).filter((a) => String(a.teacherId) === String(teacherId));
@@ -93,10 +118,10 @@ function buildTeacherSessions(teacherId, classes, overrides, todayStr) {
 
 // Sổ lương phẳng của 1 giáo viên: buổi dạy (đã nhân đơn giá/buổi) + thưởng/phạt
 // + hoa hồng giới thiệu — mỗi dòng {date, className, amount, kind, note}.
-function buildTeacherLedger({ teacherId, classes, overrides, bonuses, commissions, todayStr }) {
+function buildTeacherLedger({ teacherId, classes, overrides, bonuses, commissions, todayStr, latestWins = true }) {
   const items = [];
 
-  buildTeacherSessions(teacherId, classes, overrides, todayStr)
+  buildTeacherSessions(teacherId, classes, overrides, todayStr, { latestWins })
     .filter((s) => s.status === 'taught' || s.status === 'rescheduled')
     .forEach((s) => {
       const cls = s.classId ? classes.find((c) => String(c._id) === String(s.classId)) : classes.find((c) => c.name === s.className);
@@ -125,5 +150,5 @@ function buildTeacherLedger({ teacherId, classes, overrides, bonuses, commission
 
 module.exports = {
   DEFAULT_PAY_PERIOD_START_DAY, todayDateStr, payPeriodLabel, payPeriodBounds, currentPayPeriodLabel,
-  scheduledDates, buildTeacherSessions, buildTeacherLedger,
+  scheduledDates, buildTeacherSessions, buildTeacherLedger, latestPerClassDate, editedAt,
 };

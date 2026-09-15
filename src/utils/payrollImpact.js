@@ -3,9 +3,9 @@ const { buildTeacherLedger, payPeriodLabel } = require('./teacherLedger');
 // Chênh lệch LƯƠNG BUỔI DẠY (theo đúng công thức tính lương của hệ thống) giữa hai trạng thái
 // dữ liệu buổi dạy — dùng để báo trước ảnh hưởng của việc gắn classId cho dữ liệu cũ. Chỉ tính
 // phần buổi dạy; thưởng/phạt/hoa hồng không đổi nên không đưa vào.
-function sessionTotalsByPeriod({ teacherId, classes, sessions, startDay, todayStr }) {
+function sessionTotalsByPeriod({ teacherId, classes, sessions, startDay, todayStr, latestWins = true }) {
   const totals = new Map();
-  for (const item of buildTeacherLedger({ teacherId, classes, overrides: sessions, bonuses: [], commissions: [], todayStr })) {
+  for (const item of buildTeacherLedger({ teacherId, classes, overrides: sessions, bonuses: [], commissions: [], todayStr, latestWins })) {
     if (item.kind !== 'session') continue;
     const label = payPeriodLabel(item.date, startDay);
     const t = totals.get(label) || { amount: 0, count: 0 };
@@ -15,13 +15,15 @@ function sessionTotalsByPeriod({ teacherId, classes, sessions, startDay, todaySt
   return totals;
 }
 
-function payrollImpactByPeriod({ teachers, classes, sessionsBefore, sessionsAfter, startDay, todayStr, payments = [] }) {
+// latestWinsBefore=false: trạng thái "trước" tính theo cách cũ (lấy bản ghi đầu tiên) — dùng khi
+// báo cáo ảnh hưởng của việc chuyển sang quy tắc "bản sửa gần nhất".
+function payrollImpactByPeriod({ teachers, classes, sessionsBefore, sessionsAfter, startDay, todayStr, payments = [], latestWinsBefore = true }) {
   const paidOf = (teacherId, period) => payments
     .filter(p => String(p.teacherId) === String(teacherId) && payPeriodLabel(p.periodStart, startDay) === period)
     .reduce((s, p) => s + (p.amountPaid || 0), 0);
   const rows = [];
   for (const t of teachers) {
-    const before = sessionTotalsByPeriod({ teacherId: t._id, classes, sessions: sessionsBefore, startDay, todayStr });
+    const before = sessionTotalsByPeriod({ teacherId: t._id, classes, sessions: sessionsBefore, startDay, todayStr, latestWins: latestWinsBefore });
     const after = sessionTotalsByPeriod({ teacherId: t._id, classes, sessions: sessionsAfter, startDay, todayStr });
     for (const period of [...new Set([...before.keys(), ...after.keys()])].sort()) {
       const b = before.get(period) || { amount: 0, count: 0 };

@@ -7,6 +7,7 @@ const Enrollment = require('../models/Enrollment');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 const { packageFacts, aggregateByMonth, vnDateStr, EMPTY_BREAKDOWN } = require('../utils/revenueModel');
+const { matchesQuery } = require('../utils/textSearch');
 
 const emptyExpenses = () => ({ salary: 0, rent: 0, marketing: 0, utilities: 0, other: 0, total: 0 });
 
@@ -180,7 +181,10 @@ exports.getClosedStudentList = async (req, res) => {
       listTotal: p.listTotal, discount: p.discount,
       contract: p.netTotal, paid: f.paid, remaining: f.debt, tuitionStatus: f.tuitionStatus,
     };
-  }).sort((a, b) => b.closeDate.localeCompare(a.closeDate));
+  })
+    // ?q= tìm theo tên học sinh (không phân biệt dấu); tổng của bảng tính theo kết quả tìm.
+    .filter(r => matchesQuery(r.studentName, req.query.q))
+    .sort((a, b) => b.closeDate.localeCompare(a.closeDate));
 
   success(res, {
     items: rows.slice((page - 1) * limit, page * limit),
@@ -229,13 +233,15 @@ exports.getPaymentList = async (req, res) => {
       amount: diff, note: '',
     });
   }
-  rows.sort((a, b) => (b.date || b.closeDate).localeCompare(a.date || a.closeDate));
+  // ?q= tìm theo tên học sinh (không phân biệt dấu); tổng của bảng tính theo kết quả tìm.
+  const found = rows.filter(r => matchesQuery(r.studentName, req.query.q));
+  found.sort((a, b) => (b.date || b.closeDate).localeCompare(a.date || a.closeDate));
 
   success(res, {
-    items: rows.slice((page - 1) * limit, page * limit),
-    total: rows.length,
-    totalAmount: rows.reduce((s, r) => s + r.amount, 0),
-    manualAmount: rows.reduce((s, r) => s + (r.kind === 'manual' ? r.amount : 0), 0),
+    items: found.slice((page - 1) * limit, page * limit),
+    total: found.length,
+    totalAmount: found.reduce((s, r) => s + r.amount, 0),
+    manualAmount: found.reduce((s, r) => s + (r.kind === 'manual' ? r.amount : 0), 0),
     page, limit,
   });
 };
@@ -258,7 +264,10 @@ exports.getDebtList = async (req, res) => {
       className: names.join(' + '), classNames: names, courseCategory: categoryOfPackage(p),
       contract: p.netTotal, paid: f.paid, remaining: f.debt, tuitionStatus: f.tuitionStatus,
     };
-  }).sort((a, b) => b.remaining - a.remaining);
+  })
+    // ?q= tìm theo tên học sinh (không phân biệt dấu); tổng của bảng tính theo kết quả tìm.
+    .filter(r => matchesQuery(r.studentName, req.query.q))
+    .sort((a, b) => b.remaining - a.remaining);
 
   success(res, {
     items: rows.slice((page - 1) * limit, page * limit),

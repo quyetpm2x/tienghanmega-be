@@ -36,7 +36,7 @@ const TeacherBonus = require('../src/models/TeacherBonus');
 const PayrollSettings = require('../src/models/PayrollSettings');
 const Teacher = require('../src/models/Teacher');
 const TeacherPayment = require('../src/models/TeacherPayment');
-const { buildClassLinkPlan } = require('../src/utils/classNameSync');
+const { buildClassLinkPlan, classLinkBulkOps } = require('../src/utils/classNameSync');
 const { payPeriodLabel, DEFAULT_PAY_PERIOD_START_DAY, todayDateStr } = require('../src/utils/teacherLedger');
 const { payrollImpactByPeriod, applyLinkUpdates } = require('../src/utils/payrollImpact');
 
@@ -55,7 +55,7 @@ async function loadAll() {
     Student.find().select('classId className').lean(),
     Enrollment.find().select('classId className').lean(),
     StudentAttendance.find().select('classId className date').lean(),
-    TeacherSession.find().select('classId className date status teacherName substituteTeacherId substituteTeacherName substituteRate').lean(),
+    TeacherSession.find().select('classId className date status teacherName substituteTeacherId substituteTeacherName substituteRate updatedAt createdAt').lean(),
     TeacherBonus.find().select('classId className').lean(),
   ]);
   return { classes, students, enrollments, attendances, sessions, bonuses };
@@ -142,16 +142,9 @@ function printMoneyImpact(rows) {
 }
 
 async function applyUpdates(Model, updates) {
-  // Mỗi bản ghi đổi đúng giá trị đã lập kế hoạch; chỉ ghi nếu tên trên bản ghi vẫn như lúc lập
-  // (có ai vừa sửa thì bỏ qua, lần chạy sau sẽ tính lại).
+  // Mỗi bản ghi đổi đúng giá trị đã lập kế hoạch — xem classLinkBulkOps.
   for (let i = 0; i < updates.length; i += 200) {
-    const chunk = updates.slice(i, i + 200);
-    await Model.bulkWrite(chunk.map(u => ({
-      updateOne: {
-        filter: { _id: u._id, className: u.from },
-        update: { $set: { classId: new mongoose.Types.ObjectId(u.classId), className: u.className } },
-      },
-    })));
+    await Model.bulkWrite(classLinkBulkOps(updates.slice(i, i + 200)));
   }
 }
 

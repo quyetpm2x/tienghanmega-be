@@ -106,6 +106,10 @@ async function attachPackages(students) {
       enrollments,
       summary: {
         ...summarizePackages(packages),
+        // Số thực đã nộp (kể cả vượt học phí) và phần nộp dư — để HIỂN THỊ; mọi tính toán
+        // doanh thu/công nợ vẫn dùng paid/debt đã kẹp tối đa bằng học phí.
+        paidRaw: packages.reduce((s, p) => s + Math.max(p.paidRaw || 0, 0), 0),
+        overpaid: packages.reduce((s, p) => s + Math.max((p.paidRaw || 0) - (p.netTotal || 0), 0), 0),
         firstPaidAt: packages.map(p => p.firstPaidAt).filter(Boolean).sort((a, b) => a - b)[0] || null,
       },
     };

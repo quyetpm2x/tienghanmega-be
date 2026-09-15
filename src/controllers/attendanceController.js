@@ -36,8 +36,18 @@ async function withClassRef(body, { required }) {
   return { ...body, classId: cls._id, className: cls.name };
 }
 
+// Mỗi lớp mỗi ngày chỉ MỘT bản ghi buổi dạy: đã có thì cập nhật bản đó (bản sửa gần nhất)
+// thay vì tạo thêm — bản trùng làm lương admin và lương giảng viên tự xem lệch nhau.
 exports.create = async (req, res) => {
   const body = await withClassRef(req.body, { required: true });
+  const existing = await TeacherSession.findOne({ classId: body.classId, date: body.date }).sort({ updatedAt: -1 });
+  if (existing) {
+    const { rescheduleHistory, ...rest } = body;
+    Object.assign(existing, rest);
+    if (Array.isArray(rescheduleHistory) && rescheduleHistory.length) existing.rescheduleHistory.push(...rescheduleHistory);
+    await existing.save();
+    return success(res, existing, 'Cập nhật buổi dạy thành công');
+  }
   const session = await TeacherSession.create(body);
   success(res, session, 'Ghi nhận buổi dạy thành công', 201);
 };

@@ -30,6 +30,8 @@ exports.getMe = async (req, res, next) => {
   const packages = (byStudent.get(String(studentId)) || []).map(p => ({
     _id: p._id, listTotal: p.listTotal, discount: p.discount, netTotal: p.netTotal,
     paid: p.paid, debt: p.debt, tuitionStatus: p.tuitionStatus, createdAt: p.createdAt,
+    // Số thực đã nộp và phần nộp dư (nếu có) — học sinh thấy đúng số tiền mình đã đóng.
+    paidRaw: Math.max(p.paidRaw || 0, 0), overpaid: Math.max((p.paidRaw || 0) - (p.netTotal || 0), 0),
     courses: p.enrollments.map(e => ({
       _id: e._id, className: e.className, courseTitle: e.courseTitle, status: e.status,
       startDate: e.startDate, hasClass: !!e.classId,
@@ -37,7 +39,8 @@ exports.getMe = async (req, res, next) => {
     paymentHistory: buildPaymentHistory({
       payments: payments.filter(x => String(x.packageId) === String(p._id)),
       adjustmentHistory: p.adjustmentHistory || [],
-      paid: p.paid,
+      // Tổng các dòng lịch sử = số thực đã nộp (không kẹp).
+      paid: Math.max(p.paidRaw || 0, 0),
     }),
   }));
   success(res, { ...student, packages, enrollments });

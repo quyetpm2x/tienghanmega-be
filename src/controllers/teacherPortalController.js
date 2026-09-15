@@ -10,7 +10,7 @@ const ReferralCommission = require('../models/ReferralCommission');
 const PayrollSettings = require('../models/PayrollSettings');
 const { generateUniqueReferralCode, buildMyReferrals } = require('../utils/referral');
 const {
-  DEFAULT_PAY_PERIOD_START_DAY, todayDateStr, payPeriodLabel, payPeriodBounds, currentPayPeriodLabel, buildTeacherLedger,
+  DEFAULT_PAY_PERIOD_START_DAY, todayDateStr, payPeriodLabel, payPeriodBounds, currentPayPeriodLabel, buildTeacherLedger, latestPerClassDate,
 } = require('../utils/teacherLedger');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
@@ -37,15 +37,24 @@ const CLASS_FIELDS = 'name course days time capacity startDate endDate status co
 // Trả về lớp + ngày dạy thay cụ thể theo từng lớp (key = classId) — FE chỉ hiện ĐÚNG
 // (các) ngày dạy thay, không hiện cả lịch học định kỳ của lớp.
 async function substituteInfo(teacherId, select = CLASS_FIELDS) {
-  const rows = await TeacherSession.find({ status: 'substituted', substituteTeacherId: teacherId })
-    .select('classId className date').lean();
-  if (!rows.length) return { classes: [], ids: [], datesByClassId: {} };
-  const classes = await Class.find({
+  const subRows = await TeacherSession.find({ status: 'substituted', substituteTeacherId: teacherId })
+    .select('classId className date updatedAt createdAt').lean();
+  if (!subRows.length) return { classes: [], ids: [], datesByClassId: {} };
+  const candidates = await Class.find({
     $or: [
-      { _id: { $in: rows.filter(r => r.classId).map(r => r.classId) } },
-      { name: { $in: rows.filter(r => !r.classId).map(r => r.className) } },
+      { _id: { $in: subRows.filter(r => r.classId).map(r => r.classId) } },
+      { name: { $in: subRows.filter(r => !r.classId).map(r => r.className) } },
     ],
-  }).select(select).lean();
+  }).select(`${select} name`).lean();
+  // Chỉ tính buổi dạy thay còn hiệu lực: bản ghi mới nhất của (lớp, ngày) vẫn là dạy thay cho
+  // giáo viên này (bản cũ đã bị admin sửa sang trạng thái khác thì bỏ).
+  const sameDay = await TeacherSession.find({
+    date: { $in: [...new Set(subRows.map(r => r.date))] },
+    ...recordsOfClassesFilter(candidates),
+  }).select('classId className date status substituteTeacherId updatedAt createdAt').lean();
+  const rows = latestPerClassDate(sameDay, candidates)
+    .filter(r => r.status === 'substituted' && String(r.substituteTeacherId || '') === String(teacherId));
+  const classes = candidates.filter(c => rows.some(r => belongsToClass(r, c)));
   const datesByClassId = {};
   for (const r of rows) {
     const cls = classes.find(c => belongsToClass(r, c));
@@ -333,7 +342,7 @@ exports.getMySalary = async (req, res) => {
   classes = classes.concat(sub.classes.filter(c => !knownIds.has(String(c._id))));
 
   const [overrides, bonuses, commissions, payments] = await Promise.all([
-    TeacherSession.find(recordsOfClassesFilter(classes)).select('classId className date status teacherName substituteTeacherId substituteRate').lean(),
+    TeacherSession.find(recordsOfClassesFilter(classes)).select('classId className date status teacherName substituteTeacherId substituteRate updatedAt createdAt').lean(),
     TeacherBonus.find({ teacherId }).select('type amount date className note').lean(),
     ReferralCommission.find({ referrerModel: 'Teacher', referrerId: teacherId })
       .populate('referredStudentId', 'name').select('amount createdAt referredStudentId').lean(),

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildClassLinkPlan } = require('../src/utils/classNameSync');
+const { buildClassLinkPlan, classLinkBulkOps } = require('../src/utils/classNameSync');
 
 const classes = [
   { _id: 'c1', name: 'MG140926' },
@@ -53,6 +53,19 @@ test('tên mơ hồ / không rõ thì không gắn, chỉ báo cáo', () => {
   assert.deepEqual(plan.sessionUpdates, []);
   assert.deepEqual(plan.ambiguous.map(a => a.name), ['X']);
   assert.deepEqual(plan.unknown.map(u => [u.name, u.attendances, u.sessions]), [['LỚP-MẤT', 1, 1]]);
+});
+
+test('lệnh ghi nối lớp không đụng giờ sửa (updatedAt) — giữ thứ tự sửa thật của buổi dạy', () => {
+  const TeacherSession = require('../src/models/TeacherSession'); // nạp mongoose trước helper nội bộ của nó
+  const castUpdateOne = require('mongoose/lib/helpers/model/castBulkWrite').castUpdateOne;
+  const classId = '64b000000000000000000001';
+  const [op] = classLinkBulkOps([{ _id: '64b0000000000000000000aa', from: 'VIP30072026', classId, className: 'VIP030826 - Anh Trung' }]);
+  const cast = castUpdateOne(TeacherSession, op.updateOne, {}, new Date());
+  assert.equal(cast.update.$set.updatedAt, undefined, 'không set updatedAt');
+  assert.equal(cast.update.$setOnInsert, undefined);
+  assert.equal(String(cast.update.$set.classId), classId);
+  assert.equal(cast.update.$set.className, 'VIP030826 - Anh Trung');
+  assert.equal(cast.filter.className, 'VIP30072026', 'chỉ ghi nếu tên trên bản ghi vẫn như lúc lập kế hoạch');
 });
 
 test('đã nối đúng hết thì không có gì cần làm', () => {

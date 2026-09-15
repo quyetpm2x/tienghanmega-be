@@ -28,4 +28,7 @@ const teacherSessionSchema = new mongoose.Schema({
   substituteRate: { type: Number, default: null },
 }, { timestamps: true });
 
+// Tra nhanh "bản ghi của lớp trong ngày" (mỗi lớp mỗi ngày một bản — xem attendanceController.create).
+teacherSessionSchema.index({ classId: 1, date: 1 });
+
 module.exports = mongoose.model('TeacherSession', teacherSessionSchema);
