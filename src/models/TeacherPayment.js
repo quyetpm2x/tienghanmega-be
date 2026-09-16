@@ -9,6 +9,9 @@ const teacherPaymentSchema = new mongoose.Schema({
   amountPaid:  { type: Number, required: true },
   paidDate:    { type: String, required: true }, // ngày trả thực tế
   note:        { type: String, default: '' },
+  // Admin đã đối chiếu và chấp nhận khoản trả lệch với lương tự tính — xem utils/paymentVerify.
+  verified:    { type: Boolean, default: false },
+  verifiedAt:  { type: Date, default: null },
 }, { timestamps: true });
 
 teacherPaymentSchema.index({ teacherId: 1, periodStart: 1 }, { unique: true });

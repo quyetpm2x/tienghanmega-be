@@ -4,6 +4,7 @@ const { permit } = require('../../middlewares/permit');
 
 router.get('/', permit('teachers.viewPayroll'), ctrl.getAll);
 router.post('/', permit('teachers.recordPayment'), ctrl.upsert);
+router.patch('/:id/verify', permit('teachers.recordPayment'), ctrl.setVerified);
 router.delete('/:id', permit('teachers.recordPayment'), ctrl.remove);
 
 module.exports = router;
