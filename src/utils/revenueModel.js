@@ -72,4 +72,35 @@ function aggregateByMonth(packages, facts, { from, to } = {}) {
   return months;
 }
 
-module.exports = { vnDateStr, packageFacts, aggregateByMonth, EMPTY_BREAKDOWN, VN_OFFSET_MS };
+// Khoản chi thuộc tháng nào: theo NGÀY CHI (giờ VN), không theo nhãn "tháng" admin chọn lúc
+// nhập — hai thứ này lệch nhau được (chi 16/08 nhưng gắn nhãn tháng 9), mà mọi màn hình đều
+// lọc theo ngày chi. Lấy theo nhãn sẽ đẩy khoản chi sang tháng khác và kéo theo cả lương của
+// tháng đó vào tổng chi phí. Không có ngày chi thì đành dùng nhãn.
+function expenseMonthKey(e) {
+  return e.paidAt ? vnDateStr(e.paidAt).slice(0, 7) : (e.month || '');
+}
+
+const emptyExpenseBucket = () => ({ salary: 0, rent: 0, marketing: 0, utilities: 0, other: 0, total: 0 });
+
+// Gom khoản chi theo tháng của ngày chi, chỉ lấy các khoản nằm trong khoảng (nếu có).
+function bucketExpenses(expenses, { from, to } = {}) {
+  const byMonth = {};
+  let total = 0;
+  for (const e of expenses) {
+    const key = expenseMonthKey(e);
+    if (!key) continue;
+    const paidDate = e.paidAt ? vnDateStr(e.paidAt) : `${key}-01`;
+    if ((from || to) && ((from && paidDate < from) || (to && paidDate > to))) continue;
+    if (!byMonth[key]) byMonth[key] = emptyExpenseBucket();
+    const cat = e.category || 'other';
+    byMonth[key][cat] = (byMonth[key][cat] || 0) + (e.amount || 0);
+    byMonth[key].total += e.amount || 0;
+    total += e.amount || 0;
+  }
+  return { byMonth, total };
+}
+
+module.exports = {
+  vnDateStr, packageFacts, aggregateByMonth, EMPTY_BREAKDOWN, VN_OFFSET_MS,
+  expenseMonthKey, bucketExpenses, emptyExpenseBucket,
+};

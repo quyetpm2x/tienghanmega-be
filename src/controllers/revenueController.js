@@ -6,7 +6,7 @@ const EnrollmentPackage = require('../models/EnrollmentPackage');
 const Enrollment = require('../models/Enrollment');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
-const { packageFacts, aggregateByMonth, vnDateStr, EMPTY_BREAKDOWN } = require('../utils/revenueModel');
+const { packageFacts, aggregateByMonth, vnDateStr, EMPTY_BREAKDOWN, bucketExpenses } = require('../utils/revenueModel');
 const { matchesQuery } = require('../utils/textSearch');
 const { groupPaymentsByStudent } = require('../utils/paymentGrouping');
 
@@ -56,26 +56,14 @@ async function studentMap(ids, fields) {
 // revenue = Σ học phí gói ghi nhận trọn, collected = Σ đã nộp (kẹp), debt = Σ còn nợ.
 exports.getSummary = async (req, res) => {
   const { from, to } = req.query;
-  const inRange = inRangeFn(from, to);
   const [{ packages, facts }, targets, expenses] = await Promise.all([
     loadPackageData(),
     Revenue.find().select('month target').lean(),
     Expense.find().lean(),
   ]);
 
-  const expenseMap = {};
-  let totalExpenses = 0;
-  for (const e of expenses) {
-    const key = e.month;
-    if (!key) continue;
-    const paidDate = e.paidAt ? new Date(e.paidAt).toISOString().slice(0, 10) : `${key}-01`;
-    if ((from || to) && !inRange(paidDate)) continue;
-    if (!expenseMap[key]) expenseMap[key] = emptyExpenses();
-    const cat = e.category || 'other';
-    expenseMap[key][cat] = (expenseMap[key][cat] || 0) + (e.amount || 0);
-    expenseMap[key].total += e.amount || 0;
-    totalExpenses += e.amount || 0;
-  }
+  // Khoản chi gom theo THÁNG CỦA NGÀY CHI — cùng mốc với bộ lọc và với tab Chi phí.
+  const { byMonth: expenseMap, total: totalExpenses } = bucketExpenses(expenses, { from, to });
 
   const months = aggregateByMonth(packages, facts, { from, to });
   for (const key of Object.keys(expenseMap)) {
@@ -132,17 +120,13 @@ exports.getBreakdown = async (req, res) => {
   }
   const totalDebt = [...facts.values()].reduce((s, f) => s + f.debt, 0);
 
+  // Cùng quy tắc với /summary: khoản chi thuộc tháng của NGÀY CHI.
   const expenseBreakdown = { salary: 0, rent: 0, marketing: 0, utilities: 0, other: 0 };
-  let totalExpenses = 0;
-  for (const e of expenses) {
-    const mk = e.month;
-    if (!mk) continue;
-    const cat = e.category || 'other';
-    expenseBreakdown[cat] = (expenseBreakdown[cat] || 0) + (e.amount || 0);
-    totalExpenses += e.amount || 0;
+  const { byMonth: expByMonth, total: totalExpenses } = bucketExpenses(expenses, {});
+  for (const [mk, bucket] of Object.entries(expByMonth)) {
+    for (const cat of Object.keys(expenseBreakdown)) expenseBreakdown[cat] += bucket[cat] || 0;
     if (!byMonth[mk]) byMonth[mk] = { revenue: 0, collected: 0, debt: 0, hasEstimated: false, breakdown: EMPTY_BREAKDOWN(), expenses: emptyExpenses() };
-    byMonth[mk].expenses[cat] = (byMonth[mk].expenses[cat] || 0) + (e.amount || 0);
-    byMonth[mk].expenses.total += e.amount || 0;
+    byMonth[mk].expenses = { ...byMonth[mk].expenses, ...bucket };
   }
   const months = Object.keys(byMonth).sort();
   for (const mk of months) {
