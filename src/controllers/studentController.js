@@ -160,6 +160,15 @@ exports.updatePackage = async (req, res) => {
   success(res, await viewOf(req.params.id), 'Đã cập nhật gói đăng ký');
 };
 
+// DELETE /admin/students/:id/packages/:packageId — xoá hẳn gói, khoá trong gói và khoản thu.
+exports.deletePackage = async (req, res) => {
+  const removed = await svc.deletePackage({ studentId: req.params.id, packageId: req.params.packageId });
+  invalidateStudentIndex();
+  success(res, await viewOf(req.params.id),
+    `Đã xoá gói đăng ký: ${removed.enrollments} khoá, ${removed.payments} khoản thu` +
+    (removed.commissions ? `, ${removed.commissions} hoa hồng` : ''));
+};
+
 exports.setPackagePaid = async (req, res) => {
   await svc.setPackagePaid({ studentId: req.params.id, packageId: req.params.packageId, body: req.body, admin: req.admin });
   invalidateStudentIndex();

@@ -283,6 +283,44 @@ exports.deleteStudent = ({ id }) => inTransaction(async session => {
   await Student.deleteOne({ _id: id }).session(session);
 });
 
+// Gói đó có đủ điều kiện sinh hoa hồng giới thiệu không (đã đóng đủ + còn khoá đang học)?
+async function packageEarnsCommission(pkg, session) {
+  if (!(pkg.listTotal > 0)) return false;
+  if (!(await Enrollment.exists({ packageId: pkg._id, status: 'active' }).session(session))) return false;
+  const paymentsTotal = await sumPayments(pkg._id, session);
+  return paymentState({ netTotal: pkg.netTotal, paymentsTotal, paidAdjustment: pkg.paidAdjustment }).tuitionStatus === 'paid';
+}
+
+// XOÁ HẲN một gói đăng ký: gói, các khoá trong gói và mọi khoản thu của gói.
+// Hoa hồng giới thiệu của học sinh cũng bị xoá, TRỪ khi còn gói khác vẫn đủ điều kiện — khi
+// đó giữ nguyên bản ghi cũ để không mất trạng thái "đã trả hoa hồng".
+// Doanh thu, công nợ và sĩ số lớp sẽ giảm theo. Không khôi phục được.
+exports.deletePackage = ({ studentId, packageId }) => inTransaction(async session => {
+  const student = await loadStudent(studentId, session);
+  const pkg = await loadPackage(studentId, packageId, session);
+
+  const removed = {
+    payments: (await Payment.deleteMany({ packageId: pkg._id }).session(session)).deletedCount,
+    enrollments: (await Enrollment.deleteMany({ packageId: pkg._id }).session(session)).deletedCount,
+  };
+  await EnrollmentPackage.deleteOne({ _id: pkg._id }).session(session);
+
+  // Còn gói nào đủ điều kiện thì hoa hồng vẫn có cơ sở — giữ nguyên.
+  const rest = await EnrollmentPackage.find({ studentId: student._id }).session(session).lean();
+  let stillEarns = false;
+  for (const p of rest) {
+    if (await packageEarnsCommission(p, session)) { stillEarns = true; break; }
+  }
+  if (!stillEarns) {
+    removed.commissions = (await ReferralCommission.deleteMany({ referredStudentId: student._id }).session(session)).deletedCount;
+    student.commissionCredited = false;
+  }
+
+  await recomputeStudentStatus(student, session);
+  await student.save({ session });
+  return removed;
+});
+
 exports.addPackage = ({ studentId, body }) => inTransaction(async session => {
   const student = await loadStudent(studentId, session);
   const pkg = await createPackageForStudent(student, body && body.package, body && body.initialPayment, session);

@@ -14,6 +14,8 @@ router.post('/:id/referral-code', permit('students.generateReferral'), ctrl.gene
 router.post('/:id/packages', permit('students.update'), ctrl.addPackage);
 router.put('/:id/packages/:packageId', permit('students.update'), ctrl.updatePackage);
 router.put('/:id/packages/:packageId/adjustment', permit('students.update'), ctrl.setPackagePaid);
+// Xoá gói kéo theo khoá + khoản thu + hoa hồng → dùng quyền xoá, không phải quyền sửa.
+router.delete('/:id/packages/:packageId', permit('students.delete'), ctrl.deletePackage);
 router.put('/:id/enrollments/:enrollmentId', permit('students.update'), ctrl.updateEnrollment);
 router.post('/:id/enrollments/:enrollmentId/transfer', permit('students.transfer'), ctrl.transferEnrollment);
 
