@@ -3,6 +3,7 @@ const Class = require('../models/Class');
 const Enrollment = require('../models/Enrollment');
 const Teacher = require('../models/Teacher');
 const { success } = require('../utils/response');
+const { invalidateStudentIndex } = require('../utils/studentIndexCache');
 const AppError = require('../utils/AppError');
 const { activeStudentCountsByClass } = require('../utils/enrollment');
 const { categoryOf } = require('../utils/courseCategory');
@@ -153,6 +154,7 @@ exports.update = async (req, res, next) => {
     }
     return { cls: updated, renameSync: sync };
   });
+  invalidateStudentIndex();   // đổi tên lớp / khoá học làm đổi chỉ mục học sinh
 
   const message = renameSync
     ? `Đã đổi tên lớp và cập nhật theo: ${renameSync.enrollments} ghi danh, ${renameSync.attendances} buổi điểm danh, ${renameSync.teacherSessions} buổi dạy, ${renameSync.teacherBonuses} thưởng/phạt`
@@ -309,5 +311,6 @@ exports.remove = async (req, res, next) => {
   if (hasActive) return next(new AppError('Lớp còn học sinh đang học — hãy chuyển lớp hoặc cho nghỉ trước khi xoá', 400));
   const cls = await Class.findByIdAndDelete(req.params.id);
   if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
+  invalidateStudentIndex();
   success(res, null, 'Xóa thành công');
 };

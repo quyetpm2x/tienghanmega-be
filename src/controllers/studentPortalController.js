@@ -12,7 +12,8 @@ const AppError = require('../utils/AppError');
 // (set by protectStudent) — a student only ever sees their own record.
 
 // Không trả `note` (ghi chú nội bộ) và các trường cũ một-lớp-một-học-phí.
-const STUDENT_FIELDS = 'name phone email status';
+// createdAt: ngày thêm học sinh — làm ngày ước tính cho phần đã nộp của dữ liệu cũ.
+const STUDENT_FIELDS = 'name phone email status createdAt';
 const CLASS_FIELDS = 'name course teacher days time startDate endDate status color';
 
 exports.getMe = async (req, res, next) => {
@@ -41,6 +42,7 @@ exports.getMe = async (req, res, next) => {
       adjustmentHistory: p.adjustmentHistory || [],
       // Tổng các dòng lịch sử = số thực đã nộp (không kẹp).
       paid: Math.max(p.paidRaw || 0, 0),
+      legacyDate: student.createdAt || null,
     }),
   }));
   success(res, { ...student, packages, enrollments });

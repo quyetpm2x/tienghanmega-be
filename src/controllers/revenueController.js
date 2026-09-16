@@ -8,6 +8,7 @@ const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
 const { packageFacts, aggregateByMonth, vnDateStr, EMPTY_BREAKDOWN } = require('../utils/revenueModel');
 const { matchesQuery } = require('../utils/textSearch');
+const { groupPaymentsByStudent } = require('../utils/paymentGrouping');
 
 const emptyExpenses = () => ({ salary: 0, rent: 0, marketing: 0, utilities: 0, other: 0, total: 0 });
 
@@ -207,7 +208,9 @@ exports.getPaymentList = async (req, res) => {
   const { packages, payments, facts } = await loadPackageData();
   const scoped = closedInRange(packages, facts, from, to);
   const pkgById = new Map(scoped.map(p => [String(p._id), p]));
-  const students = await studentMap(scoped.map(p => p.studentId), 'name');
+  // createdAt = ngày thêm học sinh: dùng làm ngày ước tính cho dòng điều chỉnh tay (dữ liệu
+  // cũ và các lần ghi nhận tay đều không có ngày đóng thật).
+  const students = await studentMap(scoped.map(p => p.studentId), 'name createdAt');
 
   const rows = [];
   for (const pay of payments) {
@@ -216,7 +219,7 @@ exports.getPaymentList = async (req, res) => {
     rows.push({
       _id: String(pay._id), kind: 'payment',
       date: vnDateStr(pay.paidAt), closeDate: facts.get(String(pkg._id)).close.date,
-      studentName: students.get(String(pkg.studentId))?.name || '',
+      studentId: String(pkg.studentId), studentName: students.get(String(pkg.studentId))?.name || '',
       className: classNamesOf(pkg).join(' + '), courseCategory: categoryOfPackage(pkg),
       amount: pay.amount || 0, note: pay.note || '',
     });
@@ -225,21 +228,25 @@ exports.getPaymentList = async (req, res) => {
     const f = facts.get(String(pkg._id));
     const diff = f.paid - f.paymentsTotal;
     if (!diff) continue;
+    const stu = students.get(String(pkg.studentId));
+    const addedAt = stu && stu.createdAt ? vnDateStr(stu.createdAt) : null;
     rows.push({
       _id: `adj-${pkg._id}`, kind: 'manual',
-      date: null, closeDate: f.close.date,
-      studentName: students.get(String(pkg.studentId))?.name || '',
+      date: addedAt, dateEstimated: !!addedAt, closeDate: f.close.date,
+      studentId: String(pkg.studentId), studentName: stu?.name || '',
       className: classNamesOf(pkg).join(' + '), courseCategory: categoryOfPackage(pkg),
       amount: diff, note: '',
     });
   }
   // ?q= tìm theo tên học sinh (không phân biệt dấu); tổng của bảng tính theo kết quả tìm.
   const found = rows.filter(r => matchesQuery(r.studentName, req.query.q));
-  found.sort((a, b) => (b.date || b.closeDate).localeCompare(a.date || a.closeDate));
+  // 1 dòng = 1 HỌC SINH (chi tiết từng lần đóng nằm trong items) → phân trang theo học sinh.
+  const groups = groupPaymentsByStudent(found);
 
   success(res, {
-    items: found.slice((page - 1) * limit, page * limit),
-    total: found.length,
+    items: groups.slice((page - 1) * limit, page * limit),
+    total: groups.length,
+    paymentCount: found.length,
     totalAmount: found.reduce((s, r) => s + r.amount, 0),
     manualAmount: found.reduce((s, r) => s + (r.kind === 'manual' ? r.amount : 0), 0),
     page, limit,

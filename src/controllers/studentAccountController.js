@@ -2,6 +2,7 @@ const Account = require('../models/Account');
 const { activeClassesByStudent } = require('../utils/enrollment');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { invalidateStudentIndex } = require('../utils/studentIndexCache');
 
 // Admin/giáo viên quản lý tài khoản đăng nhập của học viên. Never returns the
 // bcrypt hash — .select('-password') on every read. Cố tình KHÔNG có hàm
@@ -40,6 +41,7 @@ exports.create = async (req, res, next) => {
   if (existing) return next(new AppError('Học viên này đã có tài khoản', 400));
 
   const account = await Account.create({ studentId, username, password, role: 'student' });
+  invalidateStudentIndex();
   const safe = await Account.findById(account._id).select('-password +passwordPlainEnc').populate('studentId', 'name');
   success(res, await withPlainPassword(safe), 'Tạo tài khoản thành công', 201);
 };
@@ -65,5 +67,6 @@ exports.update = async (req, res, next) => {
 
   const account = await Account.findOneAndUpdate({ _id: req.params.id, role: 'student' }, body, { new: true, runValidators: true }).select('-password +passwordPlainEnc').populate('studentId', 'name');
   if (!account) return next(new AppError('Không tìm thấy tài khoản', 404));
+  invalidateStudentIndex();
   success(res, await withPlainPassword(account), 'Cập nhật thành công');
 };
