@@ -138,16 +138,20 @@ function buildIndexRows({ students, money, enrollments, accountedIds }) {
 }
 
 // Tìm theo tên/SĐT/email/mã giới thiệu — không phân biệt hoa thường, như regex 'i' trước đây.
-function matchesText(row, q) {
+// exact = true: phải trùng KHỚP HOÀN TOÀN cả ô (dùng khi tên/SĐT ngắn bị lẫn nhiều kết quả).
+function matchesText(row, q, exact = false) {
   const needle = String(q).trim().toLowerCase();
   if (!needle) return true;
   return [row.name, row.phone, row.email, row.referralCode, row.referredByCode]
-    .some(v => String(v || '').toLowerCase().includes(needle));
+    .some(v => {
+      const val = String(v || '').trim().toLowerCase();
+      return exact ? val === needle : val.includes(needle);
+    });
 }
 
-function filterIndexRows(rows, { tuitionStatus, studentStatus, courseTitle, account, q, classId } = {}) {
+function filterIndexRows(rows, { tuitionStatus, studentStatus, courseTitle, account, q, exact, classId } = {}) {
   return rows.filter(r => {
-    if (q && !matchesText(r, q)) return false;
+    if (q && !matchesText(r, q, exact)) return false;
     if (classId && !r.classIds.includes(String(classId))) return false;
     if (tuitionStatus && r.tuitionStatus !== tuitionStatus) return false;
     if (studentStatus && r.status !== studentStatus) return false;

@@ -42,6 +42,8 @@ const PERMISSIONS = [
   { key: 'students.transfer', cluster: 'students', crud: 'update', label: 'Chuyển lớp học sinh' },
   { key: 'students.viewPayments', cluster: 'students', crud: 'view', label: 'Xem lịch sử thanh toán học phí' },
   { key: 'students.addPayment', cluster: 'students', crud: 'create', label: 'Thêm khoản thu học phí' },
+  { key: 'students.editPayment', cluster: 'students', crud: 'update', label: 'Sửa khoản thu đã ghi (số tiền, ngày đóng, ghi chú) và gắn ngày cho tiền cũ' },
+  { key: 'students.deletePayment', cluster: 'students', crud: 'delete', label: 'Xoá khoản thu đã ghi' },
   { key: 'students.manageAccount', cluster: 'students', crud: 'update', label: 'Quản lý tài khoản đăng nhập học sinh (gồm tạo hàng loạt cả lớp, copy username/password)' },
   { key: 'students.generateReferral', cluster: 'students', crud: 'create', label: 'Sinh mã giới thiệu cho học sinh' },
 

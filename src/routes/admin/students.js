@@ -22,5 +22,9 @@ router.post('/:id/enrollments/:enrollmentId/transfer', permit('students.transfer
 router.get('/:id/payments', permit('students.viewPayments'), ctrl.getPayments);
 router.get('/:id/payment-history', permit('students.viewPayments'), ctrl.getPaymentHistory);
 router.post('/:id/payments', permit('students.addPayment'), ctrl.addPayment);
+router.put('/:id/payments/:paymentId', permit('students.editPayment'), ctrl.updatePayment);
+router.delete('/:id/payments/:paymentId', permit('students.deletePayment'), ctrl.deletePayment);
+// Tiền cũ chưa có ngày đóng → tạo khoản thu thật, trừ lại paidAdjustment (tổng giữ nguyên).
+router.post('/:id/packages/:packageId/legacy-payment', permit('students.editPayment'), ctrl.convertLegacyPaid);
 
 module.exports = router;

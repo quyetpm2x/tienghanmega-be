@@ -445,6 +445,76 @@ exports.addPayment = ({ studentId, body, admin }) => inTransaction(async session
   return payment;
 });
 
+// Sửa MỘT khoản thu đã ghi: số tiền, ngày đóng, ghi chú. Tổng đã nộp của gói sau khi sửa
+// không được vượt học phí gói (không có chuyện đóng dư).
+exports.updatePayment = ({ studentId, paymentId, body, admin }) => inTransaction(async session => {
+  const payment = await Payment.findOne({ _id: paymentId, studentId }).session(session);
+  if (!payment) throw new AppError('Không tìm thấy khoản thu', 404);
+  if (!payment.packageId) throw new AppError('Khoản thu này chưa gắn với gói đăng ký nào', 400);
+  const pkg = await loadPackage(studentId, payment.packageId, session);
+
+  const amount = body && body.amount !== undefined ? Number(body.amount) : payment.amount;
+  if (!Number.isInteger(amount) || amount <= 0) throw new AppError('Số tiền không hợp lệ', 400);
+  if (body && body.paidAt !== undefined) {
+    const paidDate = new Date(body.paidAt);
+    if (Number.isNaN(paidDate.getTime())) throw new AppError('Ngày đóng không hợp lệ', 400);
+    payment.paidAt = paidDate;
+  }
+  const paymentsTotal = await sumPayments(pkg._id, session);
+  const nextRaw = paymentsTotal - (payment.amount || 0) + amount + (pkg.paidAdjustment || 0);
+  if (nextRaw > pkg.netTotal) {
+    throw new AppError(`Tổng đã nộp sau khi sửa (${money(nextRaw)}đ) vượt học phí gói (${money(pkg.netTotal)}đ)`, 400);
+  }
+  payment.amount = amount;
+  if (body && body.note !== undefined) payment.note = body.note || '';
+  // Ghi lại ai là người sửa gần nhất — cùng ô hiển thị với người ghi nhận ban đầu.
+  payment.recordedBy = adminNameOf(admin) || payment.recordedBy || '';
+  await payment.save({ session });
+  return payment;
+});
+
+// Xoá hẳn một khoản thu — tổng đã nộp của gói giảm đúng bằng số tiền đó.
+exports.deletePayment = ({ studentId, paymentId }) => inTransaction(async session => {
+  const payment = await Payment.findOne({ _id: paymentId, studentId }).session(session);
+  if (!payment) throw new AppError('Không tìm thấy khoản thu', 404);
+  await Payment.deleteOne({ _id: payment._id }).session(session);
+  return { amount: payment.amount || 0 };
+});
+
+// Phần "đã nộp" của dữ liệu cũ (paidAdjustment) chưa có ngày đóng. Gắn ngày cho nó = tạo một
+// khoản thu THẬT và trừ đúng số đó khỏi paidAdjustment → TỔNG ĐÃ NỘP KHÔNG ĐỔI.
+exports.convertLegacyPaid = ({ studentId, packageId, body, admin }) => inTransaction(async session => {
+  const student = await loadStudent(studentId, session);
+  const pkg = await loadPackage(studentId, packageId, session);
+  // Phần chưa có khoản thu = paidAdjustment trừ đi các lần sửa tay đã hiện thành dòng riêng.
+  const manualTotal = (pkg.adjustmentHistory || []).reduce((sum, h) => sum + ((h.to || 0) - (h.from || 0)), 0);
+  const legacyRest = (pkg.paidAdjustment || 0) - manualTotal;
+  if (legacyRest <= 0) throw new AppError('Gói này không còn khoản tiền cũ nào chưa có ngày đóng', 400);
+
+  const amount = body && body.amount !== undefined ? Number(body.amount) : legacyRest;
+  if (!Number.isInteger(amount) || amount <= 0) throw new AppError('Số tiền không hợp lệ', 400);
+  if (amount > legacyRest) throw new AppError(`Số tiền vượt quá phần dữ liệu cũ chưa có ngày đóng (${money(legacyRest)}đ)`, 400);
+  const paidDate = body && body.paidAt ? new Date(body.paidAt) : null;
+  if (!paidDate || Number.isNaN(paidDate.getTime())) throw new AppError('Vui lòng chọn ngày đóng', 400);
+
+  const enrollments = await Enrollment.find({ packageId: pkg._id }).session(session).lean();
+  const [payment] = await Payment.create([{
+    studentId: student._id,
+    packageId: pkg._id,
+    studentName: student.name,
+    className: enrollments.map(e => e.className || e.courseTitle).filter(Boolean).join(' + '),
+    courseCategory: enrollments.length === 1 ? enrollments[0].courseCategory : 'bundle',
+    amount,
+    paidAt: paidDate,
+    note: (body && body.note) || '',
+    recordedBy: adminNameOf(admin),
+  }], { session });
+  // Bù lại đúng số vừa tạo để "đã nộp" của gói giữ nguyên.
+  pkg.paidAdjustment = (pkg.paidAdjustment || 0) - amount;
+  await pkg.save({ session });
+  return payment;
+});
+
 exports.updateEnrollment = ({ studentId, enrollmentId, body }) => inTransaction(async session => {
   const student = await loadStudent(studentId, session);
   const enrollment = await Enrollment.findOne({ _id: enrollmentId, studentId }).session(session);

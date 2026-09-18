@@ -97,6 +97,12 @@ async function attachPackages(students) {
   return students.map(s => {
     const packages = byStudent.get(String(s._id)) || [];
     const enrollments = packages.flatMap(p => p.enrollments);
+    const paidRawTotal = packages.reduce((sum, p) => sum + Math.max(p.paidRaw || 0, 0), 0);
+    // Khoản thu sớm nhất. Tiền cũ nhập tay không có Payment nào → lấy NGÀY THÊM HỌC SINH
+    // làm ngày ước tính (admin nhập tiền cọc ngay lúc thêm), cùng quy tắc với lịch sử
+    // thanh toán ở utils/paymentHistory.js.
+    const realFirstPaidAt = packages.map(p => p.firstPaidAt).filter(Boolean).sort((a, b) => a - b)[0] || null;
+    const estimatedFirstPaidAt = !realFirstPaidAt && paidRawTotal > 0 ? (s.createdAt || null) : null;
     return {
       ...s,
       // Trạng thái hiển thị luôn suy từ các khoá (bản lưu trên Student chỉ là bộ đệm để đếm/lọc).
@@ -108,9 +114,10 @@ async function attachPackages(students) {
         ...summarizePackages(packages),
         // Số thực đã nộp (kể cả vượt học phí) và phần nộp dư — để HIỂN THỊ; mọi tính toán
         // doanh thu/công nợ vẫn dùng paid/debt đã kẹp tối đa bằng học phí.
-        paidRaw: packages.reduce((s, p) => s + Math.max(p.paidRaw || 0, 0), 0),
+        paidRaw: paidRawTotal,
         overpaid: packages.reduce((s, p) => s + Math.max((p.paidRaw || 0) - (p.netTotal || 0), 0), 0),
-        firstPaidAt: packages.map(p => p.firstPaidAt).filter(Boolean).sort((a, b) => a - b)[0] || null,
+        firstPaidAt: realFirstPaidAt || estimatedFirstPaidAt,
+        firstPaidEstimated: !!estimatedFirstPaidAt,
       },
     };
   });

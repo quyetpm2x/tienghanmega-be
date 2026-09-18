@@ -28,6 +28,9 @@ async function viewOf(id) {
 
 const escapeRegex = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// ?exact=1 → tìm kiếm phải trùng khớp hoàn toàn (tên/SĐT/email/mã), không phải tìm chứa.
+const isExactQuery = q => q && (q.exact === '1' || q.exact === 'true');
+
 // Mã học sinh đã có tài khoản đăng nhập — cho bộ lọc "có / chưa có tài khoản".
 async function accountedStudentIds() {
   const accounts = await Account.find({ role: 'student', studentId: { $ne: null } }).select('studentId').lean();
@@ -47,7 +50,9 @@ async function loadFilteredStudents(query) {
   }
   if (cid) filter._id = { $in: await activeStudentIdsOfClass(cid) };
   if (q && String(q).trim()) {
-    const rx = new RegExp(escapeRegex(String(q).trim()), 'i');
+    // exact = khớp hoàn toàn cả ô (neo ^...$), mặc định vẫn là tìm chứa.
+    const needle = escapeRegex(String(q).trim());
+    const rx = new RegExp(isExactQuery(query) ? `^${needle}$` : needle, 'i');
     filter.$or = [{ name: rx }, { phone: rx }, { email: rx }, { referralCode: rx }, { referredByCode: rx }];
   }
   const students = await Student.find(filter).select(HIDE_LEGACY).sort({ createdAt: -1 }).lean();
@@ -91,7 +96,7 @@ exports.getAll = async (req, res) => {
 
   // Chỉ mục lấy từ bộ nhớ đệm (làm mới sau mỗi thao tác ghi) → lọc/tìm/sắp xếp chạy tại chỗ.
   const rows = await getStudentIndex();
-  const filtered = filterIndexRows(rows, { ...req.query, classId: cls.id });
+  const filtered = filterIndexRows(rows, { ...req.query, exact: isExactQuery(req.query), classId: cls.id });
   const sorted = sortIndexRows(filtered, req.query.sort === 'asc' ? 'asc' : 'desc');
   const ids = sorted.slice((page - 1) * limit, page * limit).map(r => r._id);
 
@@ -237,6 +242,25 @@ exports.getPaymentHistory = async (req, res, next) => {
   }).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
   success(res, items);
+};
+
+exports.updatePayment = async (req, res) => {
+  await svc.updatePayment({ studentId: req.params.id, paymentId: req.params.paymentId, body: req.body, admin: req.admin });
+  invalidateStudentIndex();
+  success(res, await viewOf(req.params.id), 'Đã cập nhật khoản thu');
+};
+
+exports.deletePayment = async (req, res) => {
+  await svc.deletePayment({ studentId: req.params.id, paymentId: req.params.paymentId });
+  invalidateStudentIndex();
+  success(res, await viewOf(req.params.id), 'Đã xoá khoản thu');
+};
+
+// Gắn ngày đóng cho phần tiền cũ của một gói — tổng đã nộp không đổi.
+exports.convertLegacyPaid = async (req, res) => {
+  await svc.convertLegacyPaid({ studentId: req.params.id, packageId: req.params.packageId, body: req.body, admin: req.admin });
+  invalidateStudentIndex();
+  success(res, await viewOf(req.params.id), 'Đã gắn ngày đóng cho khoản tiền cũ');
 };
 
 exports.addPayment = async (req, res) => {
