@@ -15,6 +15,9 @@ const paymentSchema = new mongoose.Schema({
   amount:         { type: Number, required: true, min: 1 },
   paidAt:         { type: Date, default: Date.now },
   note:           { type: String, default: '' },
+  // Tên admin đã ghi nhận khoản thu. Trước đây chỉ đường "sửa tay" lưu được vết này
+  // (adjustmentHistory.changedBy); giờ mọi khoản thu đều đi qua Payment nên vết phải nằm ở đây.
+  recordedBy:     { type: String, default: '' },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Payment', paymentSchema);

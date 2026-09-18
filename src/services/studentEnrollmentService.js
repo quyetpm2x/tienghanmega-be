@@ -176,7 +176,9 @@ async function maybeCreateCommission(student, session) {
   }
 }
 
-async function recordPayment(student, pkg, enrollments, { amount, paidAt, note }, session) {
+const adminNameOf = admin => (admin && (admin.name || admin.username)) || '';
+
+async function recordPayment(student, pkg, enrollments, { amount, paidAt, note }, session, recordedBy = '') {
   const value = Number(amount);
   if (!Number.isInteger(value) || value <= 0) throw new AppError('Số tiền không hợp lệ', 400);
   const paidDate = paidAt ? new Date(paidAt) : new Date();
@@ -195,11 +197,12 @@ async function recordPayment(student, pkg, enrollments, { amount, paidAt, note }
     amount: value,
     paidAt: paidDate,
     note: note || '',
+    recordedBy: recordedBy || '',
   }], { session });
   return payment;
 }
 
-async function createPackageForStudent(student, pkgBody, initialPayment, session) {
+async function createPackageForStudent(student, pkgBody, initialPayment, session, recordedBy = '') {
   if (!pkgBody) throw new AppError('Thiếu thông tin gói đăng ký', 400);
   const items = await resolveItems(student._id, null, pkgBody.enrollments, session);
   const priced = priceItems({
@@ -230,7 +233,7 @@ async function createPackageForStudent(student, pkgBody, initialPayment, session
     status: it.status,
   })), { session, ordered: true });
   if (initialPayment && Number(initialPayment.amount) > 0) {
-    await recordPayment(student, pkg, enrollments, initialPayment, session);
+    await recordPayment(student, pkg, enrollments, initialPayment, session, recordedBy);
   }
   return pkg;
 }
@@ -247,7 +250,7 @@ async function loadPackage(studentId, packageId, session) {
   return pkg;
 }
 
-exports.createStudent = ({ body }) => inTransaction(async session => {
+exports.createStudent = ({ body, admin }) => inTransaction(async session => {
   const profileBody = (body && body.student) || {};
   const profile = pick(profileBody, PROFILE_FIELDS);
   if (!profile.name || !String(profile.name).trim()) throw new AppError('Vui lòng nhập họ tên', 400);
@@ -255,7 +258,7 @@ exports.createStudent = ({ body }) => inTransaction(async session => {
   student.referralCode = await generateUniqueReferralCode();
   await applyReferredByCode(student, profileBody);
   await student.save({ session });
-  await createPackageForStudent(student, body.package, body.initialPayment, session);
+  await createPackageForStudent(student, body.package, body.initialPayment, session, adminNameOf(admin));
   await recomputeStudentStatus(student, session);
   await student.save({ session });
   await maybeCreateCommission(student, session);
@@ -325,9 +328,9 @@ exports.deletePackage = ({ studentId, packageId }) => inTransaction(async sessio
   return removed;
 });
 
-exports.addPackage = ({ studentId, body }) => inTransaction(async session => {
+exports.addPackage = ({ studentId, body, admin }) => inTransaction(async session => {
   const student = await loadStudent(studentId, session);
-  const pkg = await createPackageForStudent(student, body && body.package, body && body.initialPayment, session);
+  const pkg = await createPackageForStudent(student, body && body.package, body && body.initialPayment, session, adminNameOf(admin));
   await recomputeStudentStatus(student, session);
   await student.save({ session });
   await maybeCreateCommission(student, session);
@@ -411,26 +414,28 @@ exports.setPackagePaid = ({ studentId, packageId, body, admin }) => inTransactio
   if (addAmount > debt) {
     throw new AppError(`Số tiền nộp thêm không được vượt quá số còn nợ của gói (${money(debt)}đ)`, 400);
   }
-  const target = before + addAmount;
-  // Sửa tay "đã nộp" không sinh Payment: phần chênh nằm ở paidAdjustment, rơi đúng vào
-  // tháng chốt của gói. Ghi vết để truy được ai đổi, từ bao nhiêu sang bao nhiêu.
-  pkg.paidAdjustment = target - paymentsTotal;
-  pkg.adjustmentHistory.push({
-    from: before,
-    to: target,
-    changedBy: (admin && (admin.name || admin.username)) || '',
-    note: (body && body.note) || '',
-  });
-  await pkg.save({ session });
+  // Sinh Payment THẬT với ngày đóng, y như nút "Ghi thanh toán" — trước đây đường này chỉ
+  // cộng vào paidAdjustment, không có ngày, nên mọi khoản thu nhập qua đây đều biến mất khỏi
+  // "tiền mặt thực thu" và bị dồn về ngày chốt của gói.
+  //
+  // KHÔNG ghi thêm vào adjustmentHistory nữa: buildPaymentHistory cộng cả payments lẫn
+  // adjustmentHistory thành các dòng riêng, ghi cả hai sẽ đếm đôi số tiền rồi đẻ ra một dòng
+  // "legacy" âm để bù lại. Vết "ai ghi nhận" giờ nằm ở Payment.recordedBy.
+  const enrollments = await Enrollment.find({ packageId: pkg._id }).session(session).lean();
+  await recordPayment(
+    student, pkg, enrollments,
+    { amount: addAmount, paidAt: body && body.paidAt, note: (body && body.note) || '' },
+    session, adminNameOf(admin),
+  );
   await maybeCreateCommission(student, session);
 });
 
-exports.addPayment = ({ studentId, body }) => inTransaction(async session => {
+exports.addPayment = ({ studentId, body, admin }) => inTransaction(async session => {
   const student = await loadStudent(studentId, session);
   if (!body || !body.packageId) throw new AppError('Vui lòng chọn gói đăng ký cần ghi nhận', 400);
   const pkg = await loadPackage(studentId, body.packageId, session);
   const enrollments = await Enrollment.find({ packageId: pkg._id }).session(session).lean();
-  const payment = await recordPayment(student, pkg, enrollments, body, session);
+  const payment = await recordPayment(student, pkg, enrollments, body, session, adminNameOf(admin));
   await maybeCreateCommission(student, session);
   return payment;
 });

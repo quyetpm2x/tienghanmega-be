@@ -24,6 +24,8 @@ function buildAdminPaymentHistory({ packageId = null, packageLabel = '', classNa
   const items = [
     ...payments.map(p => tag({
       type: 'payment', _id: String(p._id), date: p.paidAt, amount: p.amount || 0, note: p.note || '',
+      // Cùng tên trường với dòng "sửa tay" để màn hình hiện "ai ghi nhận" theo một đường duy nhất.
+      changedBy: p.recordedBy || '',
     })),
     ...adjustmentHistory
       .map(h => tag({

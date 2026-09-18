@@ -45,8 +45,11 @@ exports.update = async (req, res, next) => {
   success(res, course, 'Cập nhật thành công');
 };
 
+// NGỪNG HOẠT ĐỘNG khoá học (isActive:false) — không xoá dữ liệu. Khoá biến mất khỏi web
+// và form đăng ký, còn lớp/ghi danh cũ giữ nguyên (chúng lưu TÊN khoá, không tham chiếu id).
+// Bật lại bằng PUT /admin/courses/:id với { isActive: true }.
 exports.remove = async (req, res, next) => {
   const course = await Course.findOneAndUpdate({ slug: Number(req.params.id) }, { isActive: false }, { new: true });
   if (!course) return next(new AppError('Không tìm thấy khóa học', 404));
-  success(res, null, 'Xóa thành công');
+  success(res, null, 'Đã ngừng hoạt động khóa học');
 };

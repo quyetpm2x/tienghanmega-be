@@ -240,7 +240,7 @@ exports.getPaymentHistory = async (req, res, next) => {
 };
 
 exports.addPayment = async (req, res) => {
-  const payment = await svc.addPayment({ studentId: req.params.id, body: req.body });
+  const payment = await svc.addPayment({ studentId: req.params.id, body: req.body, admin: req.admin });
   invalidateStudentIndex();
   success(res, { payment, student: await viewOf(req.params.id) }, 'Ghi nhận thanh toán thành công');
 };

@@ -67,3 +67,48 @@ test('bản admin: tổng các dòng luôn bằng số đã nộp, phần thiế
   assert.equal(r.reduce((s, x) => s + x.amount, 0), 1500000);
   assert.deepEqual(r.map(x => x.type), ['payment', 'legacy']);
 });
+
+// ── "+ Nộp thêm" sinh Payment thật thay vì cộng vào paidAdjustment ────────────────────────
+
+test('khoản thu mang theo người ghi nhận, hiện chung một trường với dòng sửa tay', () => {
+  const r = buildAdminPaymentHistory({
+    payments: [{ _id: 'x', paidAt: '2026-09-18', amount: 3000000, note: 'ck', recordedBy: 'Quyết' }],
+    adjustmentHistory: [],
+    paid: 3000000,
+  });
+  assert.equal(r.length, 1);
+  assert.equal(r[0].type, 'payment');
+  assert.equal(r[0].changedBy, 'Quyết');
+});
+
+test('nộp thêm KHÔNG được ghi cả Payment lẫn adjustmentHistory — sẽ đếm đôi rồi đẻ dòng âm', () => {
+  // Đây là cái bẫy của việc chuyển "+ Nộp thêm" sang sinh Payment: nếu vẫn push adjustment
+  // như cũ thì lịch sử có 2 dòng +3tr cho cùng một lần đóng, và dòng "legacy" −3tr để bù.
+  const saiCach = buildAdminPaymentHistory({
+    payments: [{ _id: 'x', paidAt: '2026-09-18', amount: 3000000 }],
+    adjustmentHistory: [{ from: 0, to: 3000000, changedAt: '2026-09-18' }],
+    paid: 3000000,
+  });
+  assert.equal(saiCach.length, 3);
+  assert.equal(saiCach.filter(i => i.type === 'legacy')[0].amount, -3000000);
+
+  // Cách đang dùng: chỉ Payment, đúng một dòng và tổng khớp.
+  const dungCach = buildAdminPaymentHistory({
+    payments: [{ _id: 'x', paidAt: '2026-09-18', amount: 3000000 }],
+    adjustmentHistory: [],
+    paid: 3000000,
+  });
+  assert.equal(dungCach.length, 1);
+  assert.equal(dungCach.reduce((s, i) => s + i.amount, 0), 3000000);
+});
+
+test('gói cũ vẫn giữ nguyên lịch sử sửa tay — thay đổi chỉ áp cho lần đóng mới', () => {
+  const r = buildAdminPaymentHistory({
+    payments: [{ _id: 'x', paidAt: '2026-09-18', amount: 2000000, recordedBy: 'Quyết' }],
+    adjustmentHistory: [{ from: 0, to: 1000000, changedAt: '2026-08-01', changedBy: 'Admin cũ' }],
+    paid: 3000000,
+  });
+  assert.equal(r.length, 2);
+  assert.equal(r.reduce((s, i) => s + i.amount, 0), 3000000);
+  assert.deepEqual(r.map(i => i.type), ['payment', 'manual']);
+});
