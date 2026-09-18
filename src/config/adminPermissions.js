@@ -54,6 +54,9 @@ const PERMISSIONS = [
   { key: 'classes.editTransferDate', cluster: 'classes', crud: 'update', label: 'Sửa ngày trong lịch sử giáo viên (gồm cả ngày bắt đầu của giáo viên đầu tiên)' },
   { key: 'classes.undoTransfer', cluster: 'classes', crud: 'update', label: 'Hoàn tác lần đổi giáo viên gần nhất' },
   { key: 'classes.correctAssignmentTeacher', cluster: 'classes', crud: 'update', label: 'Sửa lại tên giáo viên của 1 đoạn lịch sử (khi ghi nhầm, không đổi ngày)' },
+  // Gom cả 4 quyền trên: khoá học của lớp giờ chứa luôn lịch, giảng viên và lương, sửa
+  // qua một đường duy nhất PUT /:id/phases (xem classController.updatePhases).
+  { key: 'classes.editPhases', cluster: 'classes', crud: 'update', label: 'Sửa khoá học của lớp (lịch, giảng viên, lương của từng khoá)' },
   { key: 'classes.viewDetail', cluster: 'classes', crud: 'view', label: 'Xem chi tiết lớp (học sinh/điểm danh)' },
 
   // ── Khoá học ──────────────────────────────────────────────────────────────

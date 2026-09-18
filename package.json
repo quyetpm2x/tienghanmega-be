@@ -13,7 +13,11 @@
     "backfill:class-ids": "node scripts/backfill-class-ids.js",
     "dedupe:teacher-sessions": "node scripts/dedupe-teacher-sessions.js",
     "backup": "bash scripts/backup.sh",
-    "copy-prod-to-dev": "bash scripts/copy-prod-to-dev.sh"
+    "copy-prod-to-dev": "bash scripts/copy-prod-to-dev.sh",
+    "find:orphans": "node scripts/find-orphan-sessions.js",
+    "migrate:phase-teachers": "node scripts/migrate-class-phase-teachers.js",
+    "verify:payroll": "node scripts/verify-payroll-unchanged.js",
+    "find:duplicates": "node scripts/find-duplicate-sessions.js"
   },
   "repository": {
     "type": "git",

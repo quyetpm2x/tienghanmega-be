@@ -14,7 +14,9 @@ const AppError = require('../utils/AppError');
 // Không trả `note` (ghi chú nội bộ) và các trường cũ một-lớp-một-học-phí.
 // createdAt: ngày thêm học sinh — làm ngày ước tính cho phần đã nộp của dữ liệu cũ.
 const STUDENT_FIELDS = 'name phone email status createdAt';
-const CLASS_FIELDS = 'name course teacher days time startDate endDate status color';
+// phases: lớp có thể chạy nhiều khoá nối tiếp — cổng học sinh cần để hiện đúng khoá/lịch
+// của từng ngày (xem utils/classPhase.js).
+const CLASS_FIELDS = 'name course teacher days time startDate endDate status color phases';
 
 exports.getMe = async (req, res, next) => {
   const studentId = req.studentAccount.studentId._id;

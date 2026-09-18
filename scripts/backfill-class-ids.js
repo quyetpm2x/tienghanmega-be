@@ -5,6 +5,7 @@
 //   Chạy thử (mặc định, KHÔNG ghi):  node scripts/backfill-class-ids.js --env-file=.env.development
 //   Ghi thật (gõ đúng tên DB):       node scripts/backfill-class-ids.js --env-file=.env.development --apply
 //   Lưu báo cáo JSON:                ... --report=backups/backfill-class-ids.json
+require('../src/config/timezone');   // PHẢI đứng trước mọi require khác
 const path = require('path');
 const fs = require('fs');
 const readline = require('readline');

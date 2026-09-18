@@ -6,6 +6,8 @@ router.get('/', permit('classes.view'), ctrl.getAll);
 router.get('/:id', permit('classes.viewDetail'), ctrl.getOne);
 router.post('/', permit('classes.create'), ctrl.create);
 router.put('/:id', permit('classes.update'), ctrl.update);
+// Khoá học của lớp (lịch + giảng viên + lương) — một đường ghi duy nhất, trong transaction.
+router.put('/:id/phases', permit('classes.editPhases'), ctrl.updatePhases);
 router.put('/:id/transfer-teacher', permit('classes.transferTeacher'), ctrl.transferTeacher);
 router.put('/:id/teacher-assignment-date', permit('classes.editTransferDate'), ctrl.updateTeacherAssignmentDate);
 router.put('/:id/undo-teacher-transfer', permit('classes.undoTransfer'), ctrl.undoTeacherTransfer);

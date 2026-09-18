@@ -65,7 +65,11 @@ function aggregateByMonth(packages, facts, { from, to } = {}) {
     m.debt += f.debt;
     if (f.close.estimated) m.hasEstimated = true;
     for (const e of pkg.enrollments || []) {
-      const cat = e.courseCategory in m.breakdown ? e.courseCategory : 'conversation';
+      // `in` đi cả chuỗi prototype: loại khoá tên "constructor"/"toString" lọt qua, rồi
+      // `m.breakdown[cat] += ...` nối chuỗi vào một function thay vì cộng số. Class và
+      // phases[].courseCategory là chuỗi tự do nên chuyện này đến được dữ liệu thật.
+      const cat = Object.prototype.hasOwnProperty.call(m.breakdown, e.courseCategory)
+        ? e.courseCategory : 'conversation';
       m.breakdown[cat] += e.netPrice || 0;
     }
   }

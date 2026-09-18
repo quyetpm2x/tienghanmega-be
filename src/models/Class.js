@@ -21,7 +21,47 @@ const classSchema = new mongoose.Schema({
   showOnSchedule: { type: Boolean, default: false },
   scheduleOrder: { type: Number, default: null },
   adminOrder: { type: Number, default: null },
+  // Lớp chạy nhiều khoá nối tiếp — mỗi giai đoạn có khoá, khoảng ngày và lịch riêng.
+  // Rỗng = lớp một khoá như trước (suy từ course/days/time/startDate/endDate). Xem utils/classPhase.js.
+  phases: {
+    type: [{
+      courseTitle: { type: String, required: true },
+      courseCategory: { type: String, default: null },
+      days: { type: String, required: true },      // "T2,T4,T6"
+      time: { type: String, default: '' },         // "19:30 - 21:30"
+      fromDate: { type: String, required: true },  // "2026-09-15"
+      toDate: { type: String, default: null },
+      // Giảng viên của RIÊNG khoá này, kèm lương. Một dòng = một đoạn (ai dạy, từ–đến,
+      // bao nhiêu). Hai đoạn trong cùng khoá không chồng ngày — chỉ 1 giảng viên tại 1
+      // thời điểm. rate null = dùng Class.ratePerSession. Xem utils/classPhase.js.
+      // Rỗng = khoá chưa khai giảng viên, rơi về teacherAssignments cấp lớp như trước.
+      teachers: {
+        type: [{
+          teacherId: { type: mongoose.Schema.Types.ObjectId, ref: 'Teacher', default: null },
+          teacherName: String,
+          fromDate: { type: String, required: true },
+          toDate: { type: String, default: null },
+          rate: { type: Number, default: null },
+        }],
+        default: [],
+      },
+    }],
+    default: [],
+  },
   ratePerSession: { type: Number, default: null },
+  // Lương/buổi đổi theo thời gian và theo giảng viên — xem utils/classRate.js.
+  // teacherIds rỗng = áp cho mọi giảng viên của lớp; toDate null = áp từ fromDate trở đi.
+  // Ngày dạy không nằm trong khoảng nào thì dùng ratePerSession ở trên.
+  rateHistory: {
+    type: [{
+      rate: { type: Number, required: true, min: 1 },
+      fromDate: { type: String, required: true },   // "2026-09-01"
+      toDate: { type: String, default: null },
+      teacherIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Teacher' }],
+      note: { type: String, default: '' },
+    }],
+    default: [],
+  },
   // Lịch sử phân công giáo viên theo mốc ngày — để tính lương đúng "giáo viên
   // nào dạy buổi nào" khi lớp đổi giáo viên giữa chừng, thay vì chỉ nhìn
   // teacherId hiện tại và gán nhầm cả các buổi quá khứ cho giáo viên mới.

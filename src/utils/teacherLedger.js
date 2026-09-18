@@ -5,11 +5,22 @@
 // thức "kỳ lương" (payPeriodLabel/Bounds) với bản admin để 2 bên luôn khớp số.
 
 const { belongsToClass } = require('./classLink');
+const { rateAt } = require('./classRate');
+const { scheduledDatesOfClass, phaseAt } = require('./classPhase');
+const { effectiveAssignments } = require('./classAssignment');
+const { resolveSession, paidTeacherIdOf } = require('./sessionPay');
 
 const DEFAULT_PAY_PERIOD_START_DAY = 10;
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const fmtDateLocal = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+// Parse "YYYY-MM-DD" thành nửa đêm GIỜ ĐỊA PHƯƠNG. KHÔNG dùng `new Date(str)`: chuỗi dạng
+// này được parse thành nửa đêm UTC, rồi getDay()/getFullYear() lại đọc theo giờ địa phương —
+// ở múi giờ ÂM (VD America/New_York) nó lùi về ngày hôm trước, làm lịch lớp mất buổi cuối
+// khoá và đẻ thêm buổi trước ngày khai giảng. Tách số ra rồi dựng ngày địa phương thì đúng
+// ở mọi múi giờ, không phải dựa vào việc ghim TZ.
+const parseLocalDate = (str) => { const [y, m, d] = String(str).split('-').map(Number); return new Date(y, m - 1, d); };
 
 function todayDateStr() {
   return fmtDateLocal(new Date());
@@ -41,21 +52,13 @@ function scheduledDates(from, to, daysStr) {
   const selected = new Set(days.map((d) => WEEKDAY_TO_JS[d]).filter((n) => n !== undefined));
   if (selected.size === 0) return [];
   const dates = [];
-  const cur = new Date(from);
-  const end = new Date(to);
+  const cur = parseLocalDate(from);
+  const end = parseLocalDate(to);
   while (cur <= end) {
     if (selected.has(cur.getDay())) dates.push(fmtDateLocal(cur));
     cur.setDate(cur.getDate() + 1);
   }
   return dates;
-}
-
-// Lớp cũ chưa từng qua 1 lần đổi giáo viên nào sẽ có teacherAssignments rỗng —
-// coi như 1 đoạn duy nhất gán cho giáo viên hiện tại từ ngày khai giảng.
-function effectiveAssignments(c) {
-  if (Array.isArray(c.teacherAssignments) && c.teacherAssignments.length > 0) return c.teacherAssignments;
-  if (!c.teacherId) return [];
-  return [{ teacherId: c.teacherId, teacherName: c.teacher, fromDate: c.startDate || '', toDate: null }];
 }
 
 // Buổi dạy CỦA RIÊNG 1 giáo viên (theo teacherId) — chỉ tính buổi rơi đúng vào
@@ -75,13 +78,23 @@ function editedAt(s) {
 // bản cho cùng lớp + ngày (sinh ra khi lớp đổi tên — tìm theo tên không thấy nên tạo thêm).
 // Lấy "bản đầu tiên tìm thấy" thì kết quả phụ thuộc thứ tự trả về → lương admin và lương
 // giảng viên tự xem có thể lệch nhau. PHẢI giống tienhanmega-fe/lib/teacherSchedule.ts.
+// So hai bản ghi cùng (lớp, ngày): mốc sửa muộn hơn thắng; HOÀ thì _id lớn hơn thắng.
+// Phải là thứ tự TOÀN PHẦN, không phụ thuộc thứ tự mảng đầu vào — backend lấy bản ghi
+// không sort còn frontend nhận bản đã sort theo ngày, nên dùng `>=` (bản đứng sau thắng)
+// sẽ cho hai bên chọn hai bản khác nhau và ra hai con số lương khác nhau.
+function beats(a, b) {
+  const ea = editedAt(a), eb = editedAt(b);
+  if (ea !== eb) return ea > eb;
+  return String(a._id || '') > String(b._id || '');
+}
+
 function latestPerClassDate(overrides, classes) {
   const best = new Map();
   for (const s of overrides) {
     const cls = classes.find((c) => belongsToClass(s, c));
     const key = `${cls ? cls._id : `name:${s.className}`}__${s.date}`;
     const cur = best.get(key);
-    if (!cur || editedAt(s) >= editedAt(cur)) best.set(key, s);
+    if (!cur || beats(s, cur)) best.set(key, s);
   }
   return [...best.values()];
 }
@@ -92,25 +105,52 @@ function buildTeacherSessions(teacherId, classes, allOverrides, todayStr, { late
   classes.forEach((c) => {
     const segments = effectiveAssignments(c).filter((a) => String(a.teacherId) === String(teacherId));
     if (segments.length === 0) return;
-    const dates = scheduledDates(c.startDate, c.endDate || todayStr, c.days || '').filter((d) => d <= todayStr);
+    // Lớp có thể chạy nhiều khoá nối tiếp, mỗi khoá lịch riêng — xem utils/classPhase.js.
+    const dates = scheduledDatesOfClass(c, todayStr).filter((d) => d <= todayStr);
     dates.forEach((date) => {
       const inSegment = segments.some((a) => date >= a.fromDate && (!a.toDate || date <= a.toDate));
       if (!inSegment) return;
       // Ngoại lệ nối với lớp theo classId (bản ghi cũ chưa có classId thì theo tên).
-      const override = overrides.find((s) => belongsToClass(s, c) && s.date === date &&
-        (s.status === 'absent' || s.status === 'rescheduled' || s.status === 'not-taught' || s.status === 'substituted'));
-      if (override) { result.push({ date, classId: c._id, className: c.name, status: override.status }); return; }
-      result.push({ date, classId: c._id, className: c.name, status: 'taught' });
+      // Lấy bản ghi của đúng (lớp, ngày) bất kể trạng thái: buổi 'taught' cũng có thể
+      // mang payDate/paidRate/paidTeacherId mà sổ lương cần đọc.
+      const override = overrides.find((s) => belongsToClass(s, c) && s.date === date);
+      const paidId = override ? paidTeacherIdOf(override) : null;
+      // Buổi đã chốt cho NGƯỜI KHÁC (dạy thay, hoặc admin gán tay) thì không còn là của
+      // giảng viên này — pass thứ 2 bên dưới sẽ cộng cho đúng người.
+      if (paidId && paidId !== String(teacherId)) return;
+      // 'absent'/'not-taught' THẮNG mọi thứ: không ai dạy buổi này nên không sinh tiền,
+      // kể cả khi bản ghi có chốt paidTeacherId. Vẫn phải mang theo `override` để pass 2
+      // nhận ra buổi này đã xử lý rồi, nếu không nó sẽ cộng thêm một dòng "đã dạy".
+      if (override && (override.status === 'absent' || override.status === 'not-taught')) {
+        result.push({ date, classId: c._id, className: c.name, status: override.status, override });
+        return;
+      }
+      // Buổi chốt đích danh cho CHÍNH giảng viên này là buổi họ đã dạy — 'substituted'
+      // chỉ có nghĩa "người theo lịch không dạy", để nguyên sẽ bị bộ lọc của
+      // buildTeacherLedger loại mất.
+      const mine = paidId === String(teacherId);
+      result.push({
+        date, classId: c._id, className: c.name,
+        status: !override || mine ? 'taught' : override.status,
+        override: override || null,
+      });
     });
   });
 
-  // Buổi giáo viên NÀY dạy THAY cho người khác — không cần nằm trong lịch/lớp họ
-  // đang phụ trách, cộng thẳng thành buổi "đã dạy" theo đúng lớp+ngày của buổi gốc.
+  // Buổi chốt đích danh cho giảng viên NÀY nhưng không nằm trong đoạn họ phụ trách
+  // (dạy thay, hoặc buổi được gán tay sang họ) — cộng thẳng theo lớp+ngày của buổi gốc.
   overrides.forEach((s) => {
-    if (s.status === 'substituted' && String(s.substituteTeacherId || '') === String(teacherId) && s.date <= todayStr) {
-      const cls = classes.find((c) => belongsToClass(s, c));
-      result.push({ date: s.date, classId: cls ? cls._id : s.classId || null, className: cls ? cls.name : s.className, status: 'taught', substituteForTeacherName: s.teacherName, substituteRate: s.substituteRate ?? null });
-    }
+    if (paidTeacherIdOf(s) !== String(teacherId)) return;
+    if (s.date > todayStr) return;
+    const already = result.some((r) => r.override && String(r.override._id) === String(s._id));
+    if (already) return;
+    const cls = classes.find((c) => belongsToClass(s, c));
+    result.push({
+      date: s.date, classId: cls ? cls._id : s.classId || null,
+      className: cls ? cls.name : s.className, status: 'taught',
+      substituteForTeacherName: s.teacherName, substituteRate: s.substituteRate ?? null,
+      override: s,
+    });
   });
 
   return result;
@@ -125,9 +165,14 @@ function buildTeacherLedger({ teacherId, classes, overrides, bonuses, commission
     .filter((s) => s.status === 'taught' || s.status === 'rescheduled')
     .forEach((s) => {
       const cls = s.classId ? classes.find((c) => String(c._id) === String(s.classId)) : classes.find((c) => c.name === s.className);
-      const amount = s.substituteRate ?? cls?.ratePerSession;
-      if (!cls || amount == null) return;
-      items.push({ className: s.className, date: s.date, amount, kind: 'session', substituteForTeacherName: s.substituteForTeacherName, substituteRate: s.substituteRate ?? null });
+      if (!cls) return;
+      // Buổi này tính cho ai, bao nhiêu, vào kỳ nào — một nơi duy nhất (utils/sessionPay.js).
+      const r = resolveSession(cls, s.override || { date: s.date }, teacherId);
+      if (r.rate == null) return;
+      // Khoá của buổi lấy theo NGÀY DẠY (s.date), không phải r.payDate: buổi dạy bù có
+      // ngày tính lương rơi sang kỳ sau nhưng vẫn thuộc khoá của ngày nó được xếp lịch.
+      const courseTitle = phaseAt(cls, s.date)?.courseTitle || cls.course || '';
+      items.push({ className: s.className, courseTitle, date: r.payDate, amount: r.rate, kind: 'session', substituteForTeacherName: s.substituteForTeacherName, substituteRate: s.override?.substituteRate ?? s.substituteRate ?? null });
     });
 
   bonuses.forEach((b) => {

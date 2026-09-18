@@ -8,6 +8,7 @@
 //   Lưu báo cáo JSON:                ... --report=backups/dedupe-teacher-sessions.json
 // Khi ghi thật, bản đầy đủ của các bản ghi bị xoá được lưu vào <report>.removed.json (hoặc
 // backups/dedupe-teacher-sessions-removed-<thời điểm>.json) để khôi phục nếu cần.
+require('../src/config/timezone');   // PHẢI đứng trước mọi require khác
 const path = require('path');
 const fs = require('fs');
 const readline = require('readline');

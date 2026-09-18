@@ -1,6 +1,7 @@
 const StudentAttendance = require('../models/StudentAttendance');
 const Student = require('../models/Student');
 const { resolveClass, recordsOfClassesFilter } = require('../utils/classLink');
+const { isValidClassDate } = require('../utils/classDate');
 const { activeStudentIdsOfClass } = require('../utils/enrollment');
 const { success } = require('../utils/response');
 const AppError = require('../utils/AppError');
@@ -52,14 +53,22 @@ function classOfRecord(record) {
 // POST — tạo buổi, không gửi records thì tự điền từ học sinh đang học lớp
 exports.create = async (req, res, next) => {
   const { classId, className, date, sessionNum, note, records } = req.body;
-  const cls = await resolveClass({ classId, className }, '_id name teacherId');
+  const cls = await resolveClass({ classId, className }, '_id name teacherId days time startDate endDate phases');
   if (!cls) return next(new AppError('Không tìm thấy lớp học', 404));
+  // Bất biến: buổi điểm danh phải nằm trong lịch lớp, hoặc là buổi bù có replacesDate
+  // trỏ vào một ngày CÓ trong lịch (xem utils/classDate.js).
+  if (!isValidClassDate(cls, { date, replacesDate: req.body.replacesDate }, 'attendance')) {
+    return next(new AppError(`Ngày ${date} không nằm trong lịch học của lớp — chọn ngày khác, hoặc điền "bù cho ngày" nếu đây là buổi học bù`, 400));
+  }
   let finalRecords = records;
   if (!finalRecords || finalRecords.length === 0) finalRecords = await rosterOf(cls._id);
   else await assertRecordsBelong(cls._id, finalRecords);
+  // Cùng lý do như teacherPortalController: đã duyệt bằng replacesDate thì phải lưu nó,
+  // nếu không buổi bù thành mồ côi ngay khi tạo.
   const session = await StudentAttendance.create({
     classId: cls._id, className: cls.name, teacherId: cls.teacherId || null, date,
     sessionNum: sessionNum || 1, note: note || '', records: finalRecords,
+    replacesDate: req.body.replacesDate || null,
   });
   success(res, session, 'Tạo buổi điểm danh thành công', 201);
 };
@@ -75,6 +84,18 @@ exports.update = async (req, res, next) => {
     if (cls) await assertRecordsBelong(cls._id, records, existing.records);
     existing.records = records;
   }
+  // Bản ghi ĐANG mồ côi thì vẫn cho sửa — nếu chặn luôn sẽ không dọn được dữ liệu cũ.
+  // Chỉ chặn khi thao tác làm một bản ghi đang hợp lệ trở thành mồ côi.
+  const next_ = {
+    date: date !== undefined ? date : existing.date,
+    replacesDate: replacesDate !== undefined ? (replacesDate || null) : existing.replacesDate,
+  };
+  const clsOf = await classOfRecord(existing);
+  const clsFull = clsOf ? await resolveClass({ classId: clsOf._id }, '_id name days time startDate endDate phases') : null;
+  if (isValidClassDate(clsFull, existing, 'attendance') && !isValidClassDate(clsFull, next_, 'attendance')) {
+    return next(new AppError(`Ngày ${next_.date} không nằm trong lịch học của lớp`, 400));
+  }
+
   if (date !== undefined) existing.date = date;
   if (sessionNum !== undefined) existing.sessionNum = sessionNum;
   if (note !== undefined) existing.note = note;

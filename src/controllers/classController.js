@@ -4,6 +4,15 @@ const Enrollment = require('../models/Enrollment');
 const Teacher = require('../models/Teacher');
 const { success } = require('../utils/response');
 const { invalidateStudentIndex } = require('../utils/studentIndexCache');
+const { validateRateHistory } = require('../utils/classRate');
+const { validatePhases, classFieldsFromPhases, openEndedPhase } = require('../utils/classPhase');
+const { diffPhases } = require('../utils/phaseDiff');
+const { paymentsToUnverify } = require('../utils/paymentVerify');
+const TeacherSession = require('../models/TeacherSession');
+const StudentAttendance = require('../models/StudentAttendance');
+const TeacherPayment = require('../models/TeacherPayment');
+const PayrollSettings = require('../models/PayrollSettings');
+const { DEFAULT_PAY_PERIOD_START_DAY } = require('../utils/teacherLedger');
 const AppError = require('../utils/AppError');
 const { activeStudentCountsByClass } = require('../utils/enrollment');
 const { categoryOf } = require('../utils/courseCategory');
@@ -105,6 +114,36 @@ exports.create = async (req, res, next) => {
     const count = await Class.countDocuments({ showOnHomepage: true });
     if (count >= MAX_HOMEPAGE_CLASSES) return next(new AppError('Đã đạt tối đa 5 lớp hiển thị banner homepage', 400));
   }
+  // Lớp mới khai báo khoá học ngay từ form tạo: khoá mang luôn lịch, giảng viên và lương,
+  // nên KHÔNG dựng teacherAssignments cấp lớp nữa (hai mô hình song song sẽ lệch nhau).
+  const list = Array.isArray(req.body.phases) ? req.body.phases : [];
+  // Tạo thẳng một lớp `closed` kèm khoá để ngỏ qua API cũng phải bị chặn — FE đã chặn
+  // nhưng lệch FE/BE ở chỗ này nghĩa là API tay vẫn tạo được lớp đóng mà vẫn ăn lương.
+  if (req.body.status === 'closed') {
+    const open = openEndedPhase(list.length ? list : { ...req.body, phases: [] });
+    if (open) {
+      return next(new AppError(`Khoá "${open.courseTitle}" (từ ${open.fromDate}) chưa có ngày kết thúc — điền ngày kết thúc cho khoá đó trước khi đóng lớp, nếu không lớp vẫn tiếp tục phát sinh lương mỗi tuần`, 400));
+    }
+  }
+  if (list.length) {
+    const phases = list.map(p => ({
+      courseTitle: String(p.courseTitle || '').trim(),
+      courseCategory: p.courseCategory || categoryOf(p.courseTitle),
+      days: p.days, time: p.time || '',
+      fromDate: p.fromDate, toDate: p.toDate || null,
+      teachers: (p.teachers || []).map(a => ({
+        teacherId: a.teacherId || null, teacherName: a.teacherName || '',
+        fromDate: a.fromDate, toDate: a.toDate || null, rate: a.rate ?? null,
+      })).sort((a, b) => a.fromDate.localeCompare(b.fromDate)),
+    })).sort((a, b) => a.fromDate.localeCompare(b.fromDate));
+    try { validatePhases(phases); } catch (e) { return next(e); }
+    const cls = await Class.create({
+      ...req.body, phases, ...classFieldsFromPhases(phases, todayDateStr()), teacherAssignments: [],
+    });
+    return success(res, cls, 'Tạo lớp học thành công', 201);
+  }
+
+  // Lớp tạo qua API cũ (chưa gửi phases) — giữ nguyên đường cũ để không vỡ client cũ.
   const teacherId = await resolveTeacherId(req.body.teacher);
   const teacherAssignments = req.body.teacher
     ? [{ teacherId, teacherName: req.body.teacher, fromDate: req.body.startDate || todayDateStr(), toDate: null }]
@@ -128,12 +167,46 @@ exports.update = async (req, res, next) => {
   delete body.teacher;
   delete body.teacherId;
   delete body.teacherAssignments;
+  // Khoá học của lớp giờ mang luôn lịch, giảng viên và lương — phải đi qua updatePhases
+  // (transaction + đồng bộ ghi danh + quyền riêng), không nhận qua route sửa lớp chung.
+  delete body.phases;
+  // ... và với lớp ĐÃ có khoá học thì mọi trường do khoá suy ra cũng vậy. Form sửa lớp
+  // không còn ô nhập chúng nhưng vẫn gửi lên giá trị CŨ đang giữ trong state, nên nếu
+  // không chặn thì mỗi lần lưu sẽ ghi đè ngược lịch vừa sửa ở khối Khoá học của lớp —
+  // kéo theo cả Enrollment.updateMany bên dưới set ghi danh về khoá cũ.
+  if ((existing.phases || []).length) {
+    for (const k of ['course', 'courseCategory', 'days', 'time', 'startDate', 'endDate']) delete body[k];
+  }
 
   const oldName = existing.name;
   if ('name' in body) {
     body.name = String(body.name || '').trim();
     if (!body.name) return next(new AppError('Vui lòng nhập tên lớp', 400));
   }
+  // Lương/buổi theo khoảng ngày + theo giảng viên — kiểm tra trước khi lưu.
+  if ('rateHistory' in body) {
+    const list = Array.isArray(body.rateHistory) ? body.rateHistory : [];
+    try { validateRateHistory(list); } catch (e) { return next(e); }
+    body.rateHistory = list.map(seg => ({
+      rate: Number(seg.rate),
+      fromDate: seg.fromDate,
+      toDate: seg.toDate || null,
+      teacherIds: (seg.teacherIds || []).filter(Boolean),
+      note: seg.note || '',
+    }));
+  }
+
+
+  // Đóng lớp mà khoá cuối còn để ngỏ ngày kết thúc thì lớp vẫn sinh buổi dạy và phát sinh
+  // lương mỗi tuần — Class.status không được đường tính lương đọc tới. Bắt điền ngày ngay
+  // tại đây, đó là trường hợp duy nhất không cần suy đoán gì: admin đã tự nói lớp đóng rồi.
+  if (body.status === 'closed' && existing.status !== 'closed') {
+    const open = openEndedPhase(existing);
+    if (open) {
+      return next(new AppError(`Khoá "${open.courseTitle}" (từ ${open.fromDate}) chưa có ngày kết thúc — điền ngày kết thúc cho khoá đó trước khi đóng lớp, nếu không lớp vẫn tiếp tục phát sinh lương mỗi tuần`, 400));
+    }
+  }
+
   const renamed = 'name' in body && body.name !== oldName;
   if (renamed && await Class.exists({ name: body.name, _id: { $ne: existing._id } })) {
     return next(new AppError(`Đã có lớp tên "${body.name}"`, 400));
@@ -146,9 +219,12 @@ exports.update = async (req, res, next) => {
       ? await renameClassEverywhere({ classId: updated._id, oldName, newName: updated.name, session })
       : null;
     // Khoá học của lớp đổi → ghi danh đổi theo (giá ghi danh KHÔNG đổi).
+    // Đổi khoá của lớp CHỈ đổi theo cho ghi danh CÒN HỌC (đang học / chưa xếp lớp / bảo lưu).
+    // Ghi danh đã hoàn thành, đã nghỉ, đã chuyển lớp phải giữ nguyên khoá cũ — nếu ghi đè,
+    // lịch sử học và cơ cấu doanh thu của các tháng cũ sẽ đổi nhóm.
     if ('course' in body) {
       await Enrollment.updateMany(
-        { classId: updated._id },
+        { classId: updated._id, status: { $in: ['active', 'unassigned', 'reserved'] } },
         { $set: { courseTitle: updated.course || '', courseCategory: categoryOf(updated.course) } },
       ).session(session);
     }
@@ -160,6 +236,116 @@ exports.update = async (req, res, next) => {
     ? `Đã đổi tên lớp và cập nhật theo: ${renameSync.enrollments} ghi danh, ${renameSync.attendances} buổi điểm danh, ${renameSync.teacherSessions} buổi dạy, ${renameSync.teacherBonuses} thưởng/phạt`
     : 'Cập nhật thành công';
   success(res, { ...cls.toObject(), renameSync }, message);
+};
+
+// Khoá học của lớp — lịch, giảng viên và LƯƠNG của từng khoá, ghi qua MỘT đường duy nhất
+// trong một transaction. Route update chung vẫn tiếp tục chặn mọi thay đổi giảng viên đi qua
+// nó (xem comment ở exports.update): hai đường ghi khác hành vi nhau là nguồn gốc của lệch
+// lương. Quyền: classes.editPhases (gộp 4 quyền đổi giáo viên cũ).
+exports.updatePhases = async (req, res, next) => {
+  const existing = await Class.findById(req.params.id);
+  if (!existing) return next(new AppError('Không tìm thấy lớp học', 404));
+
+  const list = Array.isArray(req.body.phases) ? req.body.phases : [];
+  if (!list.length) return next(new AppError('Lớp phải có ít nhất một khoá học', 400));
+
+  const phases = list.map(p => ({
+    courseTitle: String(p.courseTitle || '').trim(),
+    courseCategory: p.courseCategory || categoryOf(p.courseTitle),
+    days: p.days, time: p.time || '',
+    fromDate: p.fromDate, toDate: p.toDate || null,
+    teachers: (p.teachers || []).map(a => ({
+      teacherId: a.teacherId || null, teacherName: a.teacherName || '',
+      fromDate: a.fromDate, toDate: a.toDate || null,
+      rate: a.rate ?? null,
+    })).sort((a, b) => a.fromDate.localeCompare(b.fromDate)),
+  })).sort((a, b) => a.fromDate.localeCompare(b.fromDate));
+
+  try { validatePhases(phases); } catch (e) { return next(e); }
+
+  // So lịch cũ với lịch mới: ngày nào mất đi, bản ghi nào rơi ra ngoài, kỳ lương nào lệch.
+  const today = todayDateStr();
+  const [sessions, attendances, payments, settings] = await Promise.all([
+    TeacherSession.find({ classId: existing._id }).lean(),
+    StudentAttendance.find({ classId: existing._id }).lean(),
+    TeacherPayment.find().lean(),
+    PayrollSettings.findOne().lean(),
+  ]);
+  const startDay = settings?.startDay || DEFAULT_PAY_PERIOD_START_DAY;
+  const diff = diffPhases({ cls: existing.toObject(), nextPhases: phases, sessions, attendances, payments, today, startDay });
+
+  if (req.body.dryRun) return success(res, diff);
+
+  // Bất biến: KHÔNG được lưu nếu còn bản ghi rơi ra ngoài lịch chưa được định đoạt. Chặn ở
+  // đây chứ không chỉ ở UI — nếu không, một client cũ hay một lần gọi API tay là đủ đẻ ra
+  // buổi dạy mồ côi. Xem utils/classDate.js.
+  const resolutions = req.body.resolutions || {};
+  const unresolved = diff.orphans.filter(o => !resolutions[o.id]);
+  if (unresolved.length) {
+    return next(new AppError(`Còn ${unresolved.length} bản ghi chưa được xử lý (buổi dạy/điểm danh nằm ngoài lịch mới)`, 400));
+  }
+
+  // Ngày chuyển tới phải NẰM TRONG lịch mới và CÒN TRỐNG — nếu không, "đã định đoạt hết"
+  // là lời nói dối: bản ghi vẫn mồ côi, hoặc hai bản ghi dồn vào cùng một ngày và
+  // latestPerClassDate sẽ lặng lẽ nuốt mất một buổi đã dạy.
+  const free = new Set(diff.freeDates);
+  const used = new Set();
+  for (const o of diff.orphans) {
+    const r = resolutions[o.id];
+    if (r.action === 'delete') continue;
+    if (r.action !== 'move' || !r.toDate) {
+      return next(new AppError(`Cách xử lý không hợp lệ cho bản ghi ngày ${o.date}`, 400));
+    }
+    if (!free.has(r.toDate)) {
+      return next(new AppError(`Không chuyển được buổi ngày ${o.date} sang ${r.toDate}: ngày đó không nằm trong lịch mới hoặc lớp đã có buổi`, 400));
+    }
+    if (used.has(r.toDate)) {
+      return next(new AppError(`Hai bản ghi cùng được chuyển sang ngày ${r.toDate} — mỗi lớp mỗi ngày chỉ được một buổi`, 400));
+    }
+    used.add(r.toDate);
+  }
+
+  const fields = classFieldsFromPhases(phases, today);
+  const oldCourse = existing.course;
+
+  const cls = await mongoose.connection.transaction(async session => {
+    // Định đoạt TRƯỚC khi đổi lịch, trong cùng transaction — không có khoảnh khắc nào
+    // tồn tại bản ghi mồ côi.
+    for (const o of diff.orphans) {
+      const r = resolutions[o.id];
+      const Model = o.kind === 'session' ? TeacherSession : StudentAttendance;
+      if (r.action === 'delete') {
+        await Model.deleteOne({ _id: o.id }).session(session);
+      } else {
+        const patch = o.kind === 'session' ? { date: r.toDate } : { date: r.toDate, replacesDate: null };
+        await Model.updateOne({ _id: o.id }, { $set: patch }).session(session);
+      }
+    }
+
+    // Số lương tự tính của các kỳ này vừa đổi — khoản "đã kiểm" cũ không còn đúng nữa.
+    const touched = diff.periods.filter(p => p.diff !== 0).map(p => p.label);
+    if (touched.length && diff.teacherIds.length) {
+      // CHỈ giảng viên của chính lớp này. Bỏ cờ cả kỳ sẽ bắt admin kiểm lại tay khoản trả
+      // của mọi giảng viên khác, những người không liên quan gì tới thay đổi này.
+      const f = paymentsToUnverify(touched, startDay, diff.teacherIds);
+      await TeacherPayment.updateMany(f, { $set: { verified: false, verifiedAt: null } }).session(session);
+    }
+
+    const updated = await Class.findByIdAndUpdate(existing._id, { phases, ...fields },
+      { new: true, runValidators: true, session });
+    // Khoá học của lớp đổi → ghi danh CÒN HỌC đổi theo (giá ghi danh KHÔNG đổi). Ghi danh
+    // đã hoàn thành / nghỉ / chuyển lớp giữ nguyên khoá cũ, nếu ghi đè thì lịch sử học và
+    // cơ cấu doanh thu của các tháng cũ sẽ đổi nhóm — giống hệt exports.update.
+    if (updated.course !== oldCourse) {
+      await Enrollment.updateMany(
+        { classId: updated._id, status: { $in: ['active', 'unassigned', 'reserved'] } },
+        { $set: { courseTitle: updated.course || '', courseCategory: categoryOf(updated.course) } },
+      ).session(session);
+    }
+    return updated;
+  });
+  invalidateStudentIndex();
+  success(res, cls, 'Đã cập nhật khoá học của lớp');
 };
 
 // Đổi/chèn giáo viên phụ trách 1 lớp tại 1 ngày hiệu lực bất kỳ — không bắt buộc phải

@@ -26,6 +26,13 @@ const teacherSessionSchema = new mongoose.Schema({
   // dạy khác — dùng khi giáo viên dạy thay được trả khác giáo viên chính (VD Cô A
   // 200k/buổi, Cô B dạy thay buổi này 300k hoặc 180k).
   substituteRate: { type: Number, default: null },
+  // Chốt đích danh cho MỘT buổi: tính vào kỳ lương nào, cho ai, bao nhiêu tiền.
+  // Cả ba để trống (bản ghi cũ) thì suy từ lịch lớp tại ngày gốc như trước —
+  // xem utils/sessionPay.js. Không migration, không đổi số lương lịch sử.
+  payDate:         { type: String, default: null },  // ngày tính lương; null = dùng `date`
+  paidTeacherId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Teacher', default: null },
+  paidTeacherName: { type: String, default: '' },
+  paidRate:        { type: Number, default: null },
 }, { timestamps: true });
 
 // Tra nhanh "bản ghi của lớp trong ngày" (mỗi lớp mỗi ngày một bản — xem attendanceController.create).

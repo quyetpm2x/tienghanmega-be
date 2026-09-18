@@ -23,7 +23,14 @@ function buildSessionDedupePlan({ classes, sessions }) {
   const result = [];
   for (const g of groups.values()) {
     if (g.records.length < 2) continue;
-    const sorted = [...g.records].sort((a, b) => enteredAt(b) - enteredAt(a) || editedAt(b) - editedAt(a));
+    // Hoà cả hai mốc thì so _id — script này XOÁ bản thua, nên phải chọn đúng bản mà sổ
+    // lương coi là có hiệu lực (teacherLedger#beats). Không tie-break thì kết quả phụ thuộc
+    // thứ tự Mongo trả về, và có thể giữ lại bản KHÁC với bản trang lương đang hiển thị —
+    // lúc đó số lương đổi vĩnh viễn theo hướng không ai chủ ý.
+    const sorted = [...g.records].sort((a, b) =>
+      enteredAt(b) - enteredAt(a)
+      || editedAt(b) - editedAt(a)
+      || String(b._id || '').localeCompare(String(a._id || '')));
     const [keep, ...remove] = sorted;
     result.push({
       className: g.className, classId: g.classId, date: g.date,

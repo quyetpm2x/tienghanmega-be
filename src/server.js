@@ -1,3 +1,5 @@
+require('./config/timezone');   // PHẢI đứng trước mọi require khác — xem file đó
+
 // Load .env.development khi chạy local dev, .env khi production
 const envFile = process.env.NODE_ENV === 'production' ? '.env' : '.env.development';
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', envFile) });

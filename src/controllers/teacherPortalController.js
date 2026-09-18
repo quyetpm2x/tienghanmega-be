@@ -13,6 +13,7 @@ const {
   DEFAULT_PAY_PERIOD_START_DAY, todayDateStr, payPeriodLabel, payPeriodBounds, currentPayPeriodLabel, buildTeacherLedger, latestPerClassDate,
 } = require('../utils/teacherLedger');
 const { success } = require('../utils/response');
+const { isValidClassDate } = require('../utils/classDate');
 const AppError = require('../utils/AppError');
 const Enrollment = require('../models/Enrollment');
 const {
@@ -26,7 +27,8 @@ const { belongsToClass, recordsOfClassesFilter, resolveClass } = require('../uti
 // only ever see/write rows tied to their own teacherId.
 
 // Whitelist — never leak price/promo/homepage-display config to a teacher.
-const CLASS_FIELDS = 'name course days time capacity startDate endDate status color';
+// phases: khoá + lịch của từng giai đoạn, để lịch dạy và màn lớp hiện đúng theo ngày.
+const CLASS_FIELDS = 'name course days time capacity startDate endDate status color phases';
 
 // Lớp giáo viên KHÔNG chính thức phụ trách (không có trong teacherAssignments)
 // nhưng có dạy thay ít nhất 1 buổi ở đó (qua "Phân công dạy thay", TeacherSession
@@ -51,7 +53,7 @@ async function substituteInfo(teacherId, select = CLASS_FIELDS) {
   const sameDay = await TeacherSession.find({
     date: { $in: [...new Set(subRows.map(r => r.date))] },
     ...recordsOfClassesFilter(candidates),
-  }).select('classId className date status substituteTeacherId updatedAt createdAt').lean();
+  }).select('classId className date status substituteTeacherId payDate paidTeacherId paidTeacherName paidRate updatedAt createdAt').lean();
   const rows = latestPerClassDate(sameDay, candidates)
     .filter(r => r.status === 'substituted' && String(r.substituteTeacherId || '') === String(teacherId));
   const classes = candidates.filter(c => rows.some(r => belongsToClass(r, c)));
@@ -285,14 +287,25 @@ exports.createAttendance = async (req, res, next) => {
   const teacherId = req.teacherAccount.teacherId._id;
   const { classId, className, date, sessionNum, note, records } = req.body;
 
-  const cls = await findAccessibleClass(teacherId, { classId, className });
+  const cls = await findAccessibleClass(teacherId, { classId, className }, 'name days time startDate endDate phases');
   if (!cls) return next(new AppError('Lớp học không thuộc quyền quản lý của bạn', 403));
+  // Bất biến chống mồ côi phải chặn ở MỌI cửa vào, không chỉ hai controller của admin —
+  // xem utils/classDate.js. Buổi học bù là ngoại lệ duy nhất, phải có replacesDate.
+  if (!isValidClassDate(cls, { date, replacesDate: req.body.replacesDate }, 'attendance')) {
+    return next(new AppError(`Ngày ${date} không nằm trong lịch học của lớp`, 400));
+  }
 
   let finalRecords = records;
   if (!finalRecords || finalRecords.length === 0) finalRecords = await rosterOf(cls._id);
   else await assertRecordsBelong(cls._id, finalRecords);
 
-  const session = await StudentAttendance.create({ classId: cls._id, className: cls.name, teacherId, date, sessionNum: sessionNum || 1, note: note || '', records: finalRecords });
+  // replacesDate PHẢI được lưu: nó vừa được dùng để duyệt tính hợp lệ ở trên, bỏ đi thì buổi bù
+  // qua cửa kiểm tra rồi lưu xuống thành bản ghi mồ côi ngay lúc tạo.
+  const session = await StudentAttendance.create({
+    classId: cls._id, className: cls.name, teacherId, date,
+    sessionNum: sessionNum || 1, note: note || '', records: finalRecords,
+    replacesDate: req.body.replacesDate || null,
+  });
   success(res, session, 'Tạo buổi điểm danh thành công', 201);
 };
 
@@ -302,8 +315,22 @@ exports.updateAttendance = async (req, res, next) => {
   if (!existing) return next(new AppError('Không tìm thấy buổi điểm danh', 404));
 
   // className/teacherId are never editable from this endpoint — only session content.
-  const { date, sessionNum, note, records } = req.body;
+  const { date, sessionNum, note, records, replacesDate } = req.body;
   const body = {};
+  // Bản ghi ĐANG mồ côi vẫn cho sửa (còn dọn được); chỉ chặn khi thao tác biến một bản ghi
+  // đang hợp lệ thành mồ côi.
+  if (date !== undefined || replacesDate !== undefined) {
+    const clsFull = await resolveClass({ classId: existing.classId, className: existing.classId ? undefined : existing.className },
+      'name days time startDate endDate phases');
+    const nextRec = {
+      date: date !== undefined ? date : existing.date,
+      replacesDate: replacesDate !== undefined ? (replacesDate || null) : existing.replacesDate,
+    };
+    if (isValidClassDate(clsFull, existing, 'attendance') && !isValidClassDate(clsFull, nextRec, 'attendance')) {
+      return next(new AppError(`Ngày ${nextRec.date} không nằm trong lịch học của lớp`, 400));
+    }
+    if (replacesDate !== undefined) body.replacesDate = replacesDate || null;
+  }
   if (date !== undefined) body.date = date;
   if (sessionNum !== undefined) body.sessionNum = sessionNum;
   if (note !== undefined) body.note = note;
@@ -330,9 +357,12 @@ exports.getMySalary = async (req, res) => {
 
   // Lớp giáo viên đang/đã từng phụ trách — kể cả lớp cũ chưa có teacherAssignments
   // (fallback dùng teacherId hiện tại, xử lý trong buildTeacherLedger).
-  const classSelect = 'name teacher teacherId days startDate endDate ratePerSession teacherAssignments';
-  let classes = await Class.find({ $or: [{ teacherId }, { 'teacherAssignments.teacherId': teacherId }] })
-    .select(classSelect).lean();
+  const classSelect = 'name teacher teacherId days time startDate endDate phases ratePerSession rateHistory teacherAssignments';
+  let classes = await Class.find({ $or: [
+    { teacherId },
+    { 'teacherAssignments.teacherId': teacherId },
+    { 'phases.teachers.teacherId': teacherId },   // giảng viên nằm trong khoá học của lớp
+  ] }).select(classSelect).lean();
 
   // Lớp giáo viên này KHÔNG hề phụ trách nhưng có dạy thay 1 buổi ở đó (ngoại lệ 1
   // buổi qua "Phân công dạy thay", không đụng teacherAssignments) — vẫn cần lấy về
@@ -342,7 +372,7 @@ exports.getMySalary = async (req, res) => {
   classes = classes.concat(sub.classes.filter(c => !knownIds.has(String(c._id))));
 
   const [overrides, bonuses, commissions, payments] = await Promise.all([
-    TeacherSession.find(recordsOfClassesFilter(classes)).select('classId className date status teacherName substituteTeacherId substituteRate updatedAt createdAt').lean(),
+    TeacherSession.find(recordsOfClassesFilter(classes)).select('classId className date status teacherName substituteTeacherId substituteRate payDate paidTeacherId paidTeacherName paidRate updatedAt createdAt').lean(),
     TeacherBonus.find({ teacherId }).select('type amount date className note').lean(),
     ReferralCommission.find({ referrerModel: 'Teacher', referrerId: teacherId })
       .populate('referredStudentId', 'name').select('amount createdAt referredStudentId').lean(),
@@ -389,7 +419,7 @@ exports.getMySalary = async (req, res) => {
       sessionCount: sessionItems.length, sessionTotal, sessionsByClass,
       // Chi tiết từng buổi (ngày + lớp) — để giáo viên xem "tháng này dạy ngày nào,
       // lớp nào" thay vì chỉ thấy số buổi gộp theo lớp.
-      sessionItems: [...sessionItems].sort((a, b) => a.date.localeCompare(b.date)).map(l => ({ date: l.date, className: l.className, amount: l.amount, substituteForTeacherName: l.substituteForTeacherName || null })),
+      sessionItems: [...sessionItems].sort((a, b) => a.date.localeCompare(b.date)).map(l => ({ date: l.date, className: l.className, courseTitle: l.courseTitle || '', amount: l.amount, substituteForTeacherName: l.substituteForTeacherName || null })),
       bonusItems: bonusItems.map(b => ({ date: b.date, amount: b.amount, note: b.note })),
       penaltyItems: penaltyItems.map(b => ({ date: b.date, amount: b.amount, note: b.note })),
       commissionItems: commissionLineItems.map(c => ({ date: c.date, amount: c.amount, note: c.note })),

@@ -12,6 +12,7 @@ const {
   priceItems, paymentState, deriveStudentStatus, normalizeEnrollmentStatus, commissionOf, PackageMathError,
 } = require('../utils/packageMath');
 const { categoryOf } = require('../utils/courseCategory');
+const { phaseAt } = require('../utils/classPhase');
 const { ENROLLMENT_STATUSES } = require('../models/Enrollment');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -73,7 +74,7 @@ async function resolveItems(studentId, packageId, rawItems, session) {
   }
   const pickIds = key => rawItems.map(i => i && i[key]).filter(Boolean);
   const [classes, courses, existing] = await Promise.all([
-    Class.find({ _id: { $in: pickIds('classId') } }).select('name course').session(session),
+    Class.find({ _id: { $in: pickIds('classId') } }).select('name course phases startDate endDate days time').session(session),
     Course.find({ _id: { $in: pickIds('courseId') } }).select('title').session(session),
     packageId
       ? Enrollment.find({ _id: { $in: pickIds('_id') }, packageId }).session(session)
@@ -83,7 +84,7 @@ async function resolveItems(studentId, packageId, rawItems, session) {
   const courseById = new Map(courses.map(c => [String(c._id), c]));
   const existingById = new Map(existing.map(e => [String(e._id), e]));
   // Lớp chọn mà không kèm khoá học → tìm khoá học theo tên (Class.course = Course.title.vi).
-  const titles = classes.map(c => c.course).filter(Boolean);
+  const titles = classes.flatMap(c => [c.course, ...(c.phases || []).map(p => p.courseTitle)]).filter(Boolean);
   const coursesByTitle = new Map((titles.length
     ? await Course.find({ 'title.vi': { $in: titles } }).select('title').session(session)
     : []).map(c => [c.title && c.title.vi, c]));
@@ -95,7 +96,10 @@ async function resolveItems(studentId, packageId, rawItems, session) {
     const label = `Khoá thứ ${idx + 1}`;
     const cls = it.classId ? classById.get(String(it.classId)) : null;
     if (it.classId && !cls) throw new AppError(`${label}: không tìm thấy lớp`, 400);
-    const course = it.courseId ? courseById.get(String(it.courseId)) : (cls ? coursesByTitle.get(cls.course) : null);
+    // Lớp chạy nhiều khoá nối tiếp: khoá của ghi danh là khoá của GIAI ĐOẠN chứa ngày bắt
+    // đầu học, không phải khoá đang chạy của lớp (xem utils/classPhase.js).
+    const clsCourseTitle = cls ? (phaseAt(cls, it.startDate || cls.startDate || '')?.courseTitle || cls.course || '') : '';
+    const course = it.courseId ? courseById.get(String(it.courseId)) : (cls ? coursesByTitle.get(clsCourseTitle) : null);
     if (it.courseId && !course) throw new AppError(`${label}: không tìm thấy khoá học`, 400);
     const prev = it._id ? existingById.get(String(it._id)) : null;
     if (!cls && !course && !(prev && prev.courseTitle)) throw new AppError(`${label} chưa chọn khoá học`, 400);
@@ -117,7 +121,7 @@ async function resolveItems(studentId, packageId, rawItems, session) {
       if (dup) throw new AppError(`Học sinh đang học lớp "${cls.name}" ở một gói khác`, 400);
     }
 
-    const courseTitle = course ? ((course.title && course.title.vi) || '') : cls ? (cls.course || '') : prev.courseTitle;
+    const courseTitle = course ? ((course.title && course.title.vi) || '') : cls ? (clsCourseTitle || '') : prev.courseTitle;
     items.push({
       _id: it._id,
       courseId: course ? course._id : (prev ? prev.courseId : null),
@@ -468,7 +472,7 @@ exports.transferEnrollment = ({ studentId, enrollmentId, body }) => inTransactio
   const enrollment = await Enrollment.findOne({ _id: enrollmentId, studentId }).session(session);
   if (!enrollment) throw new AppError('Không tìm thấy khoá học của học sinh', 404);
   if (!body || !body.toClassId) throw new AppError('Thiếu thông tin lớp mới', 400);
-  const cls = await Class.findById(body.toClassId).select('name course').session(session);
+  const cls = await Class.findById(body.toClassId).select('name course phases startDate endDate days time').session(session);
   if (!cls) throw new AppError('Không tìm thấy lớp mới', 404);
   if (enrollment.classId && String(enrollment.classId) === String(cls._id)) {
     throw new AppError('Học sinh đang ở lớp này', 400);
@@ -492,14 +496,16 @@ exports.transferEnrollment = ({ studentId, enrollmentId, body }) => inTransactio
     enrollment.startDate = body.startDate;
   }
   if (!enrollment.startDate) throw new AppError('Vui lòng chọn ngày bắt đầu học ở lớp này', 400);
-  const matchedCourse = await Course.findOne({ 'title.vi': cls.course }).select('_id').session(session);
+  // Chuyển lớp: khoá lấy theo giai đoạn chứa ngày bắt đầu ở lớp mới.
+  const phaseTitle = phaseAt(cls, body.startDate || enrollment.startDate || cls.startDate || '')?.courseTitle || cls.course || '';
+  const matchedCourse = await Course.findOne({ 'title.vi': phaseTitle }).select('_id').session(session);
   if (matchedCourse) enrollment.courseId = matchedCourse._id;
   enrollment.classId = cls._id;
   enrollment.className = cls.name;
   // Xếp lớp cho khoá đang chờ → bắt đầu học.
   if (enrollment.status === 'unassigned') enrollment.status = 'active';
-  enrollment.courseTitle = cls.course || '';
-  enrollment.courseCategory = categoryOf(cls.course);
+  enrollment.courseTitle = phaseTitle;
+  enrollment.courseCategory = categoryOf(phaseTitle);
   await enrollment.save({ session });
   // Xếp lớp có thể đổi trạng thái học sinh (chưa xếp lớp → đang học) và làm gói đủ điều
   // kiện hoa hồng (cần ít nhất một khoá đang học).
