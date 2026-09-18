@@ -7,6 +7,7 @@ const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const ReferralCommission = require('../models/ReferralCommission');
 const AppError = require('../utils/AppError');
+const { normalizeRegisteredAt } = require('../utils/registrationDate');
 const { generateUniqueReferralCode, resolveReferrer } = require('../utils/referral');
 const {
   priceItems, paymentState, deriveStudentStatus, normalizeEnrollmentStatus, commissionOf, PackageMathError,
@@ -18,6 +19,7 @@ const { ENROLLMENT_STATUSES } = require('../models/Enrollment');
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PROFILE_FIELDS = ['name', 'phone', 'email', 'note'];
 const money = n => (n || 0).toLocaleString('vi-VN');
+
 
 // Mọi thao tác chạm nhiều collection chạy trong MỘT transaction: lỗi giữa chừng không
 // để lại học sinh không gói, gói không khoá, khoản thu lẻ hay hoa hồng mồ côi (trước
@@ -216,6 +218,7 @@ async function createPackageForStudent(student, pkgBody, initialPayment, session
     discount: priced.discount,
     netTotal: priced.netTotal,
     discountAllocation: priced.discountAllocation,
+    registeredAt: normalizeRegisteredAt(pkgBody.registeredAt),
     note: pkgBody.note || '',
   }], { session });
   const enrollments = await Enrollment.create(items.map((it, i) => ({
@@ -392,6 +395,8 @@ exports.updatePackage = ({ studentId, packageId, body }) => inTransaction(async 
   pkg.discount = priced.discount;
   pkg.netTotal = priced.netTotal;
   pkg.discountAllocation = priced.discountAllocation;
+  // Chỉ đổi khi form có gửi lên, để các luồng sửa khác không vô tình xoá mất ngày đăng ký.
+  if (body && body.registeredAt !== undefined) pkg.registeredAt = normalizeRegisteredAt(body.registeredAt);
   if (body && body.note !== undefined) pkg.note = body.note;
   await pkg.save({ session });
 

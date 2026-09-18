@@ -21,6 +21,12 @@ const packageSchema = new mongoose.Schema({
     changedAt: { type: Date, default: Date.now },
     note: { type: String, default: '' },
   }],
+  // Ngày học sinh ĐĂNG KÝ gói này, dạng "YYYY-MM-DD" (cùng kiểu Enrollment.startDate — chuỗi
+  // ngày do người nhập chọn, không phải mốc thời gian nên không cần đổi múi giờ).
+  // Mặc định hôm nay lúc tạo, nhưng admin sửa được để nhập bù cho đăng ký cũ.
+  // KHÁC createdAt: createdAt là lúc lưu bản ghi, và với gói migrate nó là ngày chạy script
+  // chứ không phải ngày đăng ký thật.
+  registeredAt: { type: String, default: '' },
   note: { type: String, default: '' },
   // Ảnh chụp Student lúc chuyển đổi dữ liệu — chỉ để đối chiếu, luồng mới không đọc.
   legacy: {
