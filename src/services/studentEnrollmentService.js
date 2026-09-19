@@ -6,6 +6,12 @@ const EnrollmentPackage = require('../models/EnrollmentPackage');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const ReferralCommission = require('../models/ReferralCommission');
+const Account = require('../models/Account');
+const StudentAttendance = require('../models/StudentAttendance');
+const StudentFeedback = require('../models/StudentFeedback');
+const HomeworkSubmission = require('../models/HomeworkSubmission');
+const TestAttempt = require('../models/TestAttempt');
+const HomeworkAssignment = require('../models/HomeworkAssignment');
 const AppError = require('../utils/AppError');
 const { normalizeRegisteredAt } = require('../utils/registrationDate');
 const { generateUniqueReferralCode, resolveReferrer } = require('../utils/referral');
@@ -115,13 +121,8 @@ async function resolveItems(studentId, packageId, rawItems, session) {
     if (it.status !== undefined && !ENROLLMENT_STATUSES.includes(it.status)) {
       throw new AppError(`${label}: trạng thái không hợp lệ`, 400);
     }
-    if (cls) {
-      const dup = await Enrollment.exists({
-        studentId, classId: cls._id, status: 'active',
-        ...(packageId ? { packageId: { $ne: packageId } } : {}),
-      }).session(session);
-      if (dup) throw new AppError(`Học sinh đang học lớp "${cls.name}" ở một gói khác`, 400);
-    }
+    // Học lại cùng một lớp ở GÓI KHÁC là hợp lệ (học viên đăng ký học lần 2). Giao diện cảnh
+    // báo trước khi lưu và đánh dấu sau khi lưu; trùng lớp TRONG CÙNG một gói vẫn bị chặn ở trên.
 
     const courseTitle = course ? ((course.title && course.title.vi) || '') : cls ? (clsCourseTitle || '') : prev.courseTitle;
     items.push({
@@ -280,17 +281,47 @@ exports.updateStudent = ({ id, body }) => inTransaction(async session => {
   return student._id;
 });
 
-exports.deleteStudent = ({ id }) => inTransaction(async session => {
-  await loadStudent(id, session);
-  const hasMoney = await Payment.exists({ studentId: id }).session(session)
-    || await EnrollmentPackage.exists({ studentId: id, paidAdjustment: { $ne: 0 } }).session(session);
-  // Xoá học sinh đã có tiền sẽ làm doanh thu tụt âm thầm và để lại khoản thu mồ côi.
-  if (hasMoney) {
-    throw new AppError('Học sinh đã có khoản thu nên không xoá được (để giữ lịch sử doanh thu). Hãy chuyển các khoá sang trạng thái nghỉ.', 400);
+// So tên gõ tay với tên học sinh: bỏ khoảng trắng thừa, không phân biệt hoa thường — nhưng
+// vẫn phải đúng từng chữ (kể cả dấu). Đây là chốt chặn cuối trước khi xoá vĩnh viễn.
+const sameName = (a, b) => String(a || '').trim().replace(/\s+/g, ' ').toLowerCase()
+  === String(b || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+// XOÁ VĨNH VIỄN học sinh và MỌI dữ liệu gắn với em đó: gói đăng ký, khoá, khoản thu, hoa
+// hồng, tài khoản đăng nhập, điểm danh, phản hồi, bài tập đã nộp, bài kiểm tra đã làm.
+// Doanh thu các tháng cũ sẽ GIẢM theo vì khoản thu bị xoá — không khôi phục được.
+// Bắt buộc gửi confirmName đúng tên học sinh (chốt chặn cuối, tránh gọi nhầm API).
+exports.deleteStudent = ({ id, body }) => inTransaction(async session => {
+  const student = await loadStudent(id, session);
+  if (!sameName(body && body.confirmName, student.name)) {
+    throw new AppError('Tên xác nhận không khớp — hãy nhập đúng họ tên học sinh để xoá', 400);
   }
-  await Enrollment.deleteMany({ studentId: id }).session(session);
-  await EnrollmentPackage.deleteMany({ studentId: id }).session(session);
+  const removed = {
+    payments: (await Payment.deleteMany({ studentId: id }).session(session)).deletedCount,
+    enrollments: (await Enrollment.deleteMany({ studentId: id }).session(session)).deletedCount,
+    packages: (await EnrollmentPackage.deleteMany({ studentId: id }).session(session)).deletedCount,
+    // Hoa hồng cả hai chiều: em này được giới thiệu, và em này giới thiệu người khác.
+    commissions: (await ReferralCommission.deleteMany({
+      $or: [{ referredStudentId: id }, { referrerModel: 'Student', referrerId: id }],
+    }).session(session)).deletedCount,
+    accounts: (await Account.deleteMany({ role: 'student', studentId: id }).session(session)).deletedCount,
+    attendance: (await StudentAttendance.deleteMany({ studentId: id }).session(session)).deletedCount,
+    feedback: (await StudentFeedback.deleteMany({ studentId: id }).session(session)).deletedCount,
+    homework: (await HomeworkSubmission.deleteMany({ studentId: id }).session(session)).deletedCount,
+    testAttempts: (await TestAttempt.deleteMany({ studentId: id }).session(session)).deletedCount,
+  };
+  // Bài tập giao riêng cho em này: gỡ tên khỏi danh sách người được giao (giữ lại bài giao
+  // cho cả lớp) để trang bài tập không còn người nhận mồ côi.
+  removed.assignments = (await HomeworkAssignment.updateMany(
+    { studentIds: id }, { $pull: { studentIds: id } },
+  ).session(session)).modifiedCount;
+  // Các em ĐƯỢC em này giới thiệu: mã giới thiệu trỏ vào người không còn tồn tại, và hoa
+  // hồng tương ứng vừa bị xoá → gỡ liên kết, trả trạng thái hoa hồng về chưa ghi nhận.
+  removed.referredStudents = (await Student.updateMany(
+    { referrerModel: 'Student', referrerId: id },
+    { $set: { referredByCode: '', referrerModel: null, referrerId: null, commissionCredited: false } },
+  ).session(session)).modifiedCount;
   await Student.deleteOne({ _id: id }).session(session);
+  return removed;
 });
 
 // Gói đó có đủ điều kiện sinh hoa hồng giới thiệu không (đã đóng đủ + còn khoá đang học)?
@@ -527,12 +558,8 @@ exports.updateEnrollment = ({ studentId, enrollmentId, body }) => inTransaction(
     if (body.status === 'unassigned' && enrollment.classId) {
       throw new AppError(`Khoá đang ở lớp "${enrollment.className}" nên không thể chuyển về "Chưa xếp lớp"`, 400);
     }
-    if (body.status === 'active' && enrollment.classId) {
-      const dup = await Enrollment.exists({
-        studentId, classId: enrollment.classId, status: 'active', _id: { $ne: enrollment._id },
-      }).session(session);
-      if (dup) throw new AppError(`Học sinh đang học lớp "${enrollment.className}" ở một gói khác`, 400);
-    }
+    // Bật lại trạng thái "đang học" khi đã có ghi danh khác cùng lớp: vẫn cho, vì học lại là
+    // chuyện có thật. Danh sách lớp đếm theo NGƯỜI nên sĩ số không bị nhân đôi.
     enrollment.status = body.status;
   }
   if (body && body.startDate !== undefined) {

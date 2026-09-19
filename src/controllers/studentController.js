@@ -136,9 +136,10 @@ exports.update = async (req, res) => {
 };
 
 exports.remove = async (req, res) => {
-  await svc.deleteStudent({ id: req.params.id });
+  const removed = await svc.deleteStudent({ id: req.params.id, body: req.body });
   invalidateStudentIndex();
-  success(res, null, 'Xóa thành công');
+  success(res, removed,
+    `Đã xoá học sinh: ${removed.packages} gói, ${removed.enrollments} khoá, ${removed.payments} khoản thu`);
 };
 
 // POST /admin/students/:id/referral-code — sinh mã cho học sinh CHƯA có (idempotent).
