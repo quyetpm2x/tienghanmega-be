@@ -1,4 +1,6 @@
 const { STATUS_PRIORITY } = require('./packageMath');
+const { packageRegisteredOn, dayOf } = require('./registeredDate');
+const { matchesPackageCount, matchesRegisteredOn } = require('./studentQuery');
 
 // "Chỉ mục" học sinh để LỌC / SẮP XẾP / PHÂN TRANG mà không phải dựng dữ liệu đầy đủ.
 //
@@ -34,7 +36,7 @@ function studentIndexUnionPipeline({ studentIds } = {}) {
   const pkgMatch = studentIds ? [{ $match: { studentId: { $in: studentIds } } }] : [];
   return [
     ...pkgMatch,
-    { $project: { kind: 'pkg', studentId: 1, netTotal: 1, paidAdjustment: 1 } },
+    { $project: { kind: 'pkg', studentId: 1, netTotal: 1, paidAdjustment: 1, registeredAt: 1, createdAt: 1 } },
     { $unionWith: { coll: 'payments', pipeline: [
       { $group: { _id: '$packageId', total: { $sum: '$amount' } } },
       { $project: { kind: 'pay', total: 1 } },
@@ -44,7 +46,7 @@ function studentIndexUnionPipeline({ studentIds } = {}) {
       { $addFields: { kind: 'enr' } },
     ] } },
     { $unionWith: { coll: 'students', pipeline: [
-      { $project: { kind: 'stu', status: 1, name: 1, phone: 1, email: 1, referralCode: 1, referredByCode: 1 } },
+      { $project: { kind: 'stu', status: 1, name: 1, phone: 1, email: 1, referralCode: 1, referredByCode: 1, createdAt: 1 } },
     ] } },
     { $unionWith: { coll: 'accounts', pipeline: [
       { $match: { role: 'student', studentId: { $ne: null } } },
@@ -75,10 +77,12 @@ function moneyByStudent(packages, paymentTotals) {
     const paidRaw = (p.paidAdjustment || 0) + (paid.get(String(p._id)) || 0);
     const pkgPaid = Math.min(Math.max(paidRaw, 0), net);
     const key = String(p.studentId);
-    const cur = byStudent.get(key) || { _id: p.studentId, packages: 0, allFull: 1, anyPaid: 0 };
+    const cur = byStudent.get(key) || { _id: p.studentId, packages: 0, allFull: 1, anyPaid: 0, regDates: [] };
     cur.packages += 1;
     if (!(net > 0 && pkgPaid >= net)) cur.allFull = 0;
     if (pkgPaid > 0) cur.anyPaid = 1;
+    const reg = packageRegisteredOn(p);
+    if (reg) cur.regDates.push(reg);
     byStudent.set(key, cur);
   }
   return [...byStudent.values()];
@@ -130,6 +134,9 @@ function buildIndexRows({ students, money, enrollments, accountedIds }) {
       tuitionStatus,
       status,
       courseTitles: e?.courseTitles || [],
+      packageCount: m?.packages || 0,
+      // Chưa có gói nào thì ngày đăng ký = ngày tạo hồ sơ (một khái niệm duy nhất).
+      regDates: (m?.regDates || []).length ? m.regDates : [dayOf(s.createdAt)].filter(Boolean),
       classIds: (e?.classIds || []).map(String),
       start: e?.start || '',
       hasAccount: accountedIds ? accountedIds.has(String(s._id)) : false,
@@ -149,7 +156,7 @@ function matchesText(row, q, exact = false) {
     });
 }
 
-function filterIndexRows(rows, { tuitionStatus, studentStatus, courseTitle, account, q, exact, classId } = {}) {
+function filterIndexRows(rows, { tuitionStatus, studentStatus, courseTitle, account, q, exact, classId, packages, registeredAt } = {}) {
   return rows.filter(r => {
     if (q && !matchesText(r, q, exact)) return false;
     if (classId && !r.classIds.includes(String(classId))) return false;
@@ -158,13 +165,17 @@ function filterIndexRows(rows, { tuitionStatus, studentStatus, courseTitle, acco
     if (courseTitle && !r.courseTitles.includes(courseTitle)) return false;
     if (account === 'has-account' && !r.hasAccount) return false;
     if (account === 'no-account' && r.hasAccount) return false;
+    if (!matchesPackageCount(r.packageCount, packages)) return false;
+    if (!matchesRegisteredOn(r.regDates, registeredAt)) return false;
     return true;
   });
 }
 
 // Theo ngày bắt đầu; chưa có ngày thì xuống cuối ở cả hai chiều.
 function sortIndexRows(rows, sort = 'desc') {
-  const key = r => r.start || MISSING_DATE_LAST;
+  // Sắp theo NGÀY ĐĂNG KÝ gần nhất (cột đang hiện ở bảng học sinh); gói cũ chưa có ngày
+  // đăng ký thì lùi về ngày bắt đầu học để không dồn hết xuống cuối.
+  const key = r => (r.regDates || []).slice().sort().pop() || r.start || MISSING_DATE_LAST;
   return [...rows].sort((a, b) => {
     const ka = key(a), kb = key(b);
     if (ka === kb) return String(a._id).localeCompare(String(b._id));

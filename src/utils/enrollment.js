@@ -3,6 +3,7 @@ const Enrollment = require('../models/Enrollment');
 const EnrollmentPackage = require('../models/EnrollmentPackage');
 const Payment = require('../models/Payment');
 const { paymentState, summarizePackages, deriveStudentStatus, normalizeEnrollmentStatus } = require('./packageMath');
+const { firstRegisteredOn } = require('./registeredDate');
 
 // Nơi DUY NHẤT trả lời "học sinh của lớp" và "các lớp của học sinh". Trước đây mỗi
 // controller tự truy Student.className hoặc Student.classId (hai khoá có thể lệch
@@ -98,11 +99,12 @@ async function attachPackages(students) {
     const packages = byStudent.get(String(s._id)) || [];
     const enrollments = packages.flatMap(p => p.enrollments);
     const paidRawTotal = packages.reduce((sum, p) => sum + Math.max(p.paidRaw || 0, 0), 0);
-    // Khoản thu sớm nhất. Tiền cũ nhập tay không có Payment nào → lấy NGÀY THÊM HỌC SINH
-    // làm ngày ước tính (admin nhập tiền cọc ngay lúc thêm), cùng quy tắc với lịch sử
-    // thanh toán ở utils/paymentHistory.js.
+    // Khoản thu sớm nhất. Tiền cũ nhập tay không có Payment nào → lấy NGÀY ĐĂNG KÝ làm
+    // ngày ước tính (admin nhập tiền cọc ngay lúc đăng ký), cùng quy tắc với lịch sử thanh
+    // toán ở controllers/studentController.js — xem utils/registeredDate.js.
     const realFirstPaidAt = packages.map(p => p.firstPaidAt).filter(Boolean).sort((a, b) => a - b)[0] || null;
-    const estimatedFirstPaidAt = !realFirstPaidAt && paidRawTotal > 0 ? (s.createdAt || null) : null;
+    const estimatedFirstPaidAt = !realFirstPaidAt && paidRawTotal > 0
+      ? (firstRegisteredOn(s, packages) || null) : null;
     return {
       ...s,
       // Trạng thái hiển thị luôn suy từ các khoá (bản lưu trên Student chỉ là bộ đệm để đếm/lọc).

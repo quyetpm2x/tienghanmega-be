@@ -6,6 +6,7 @@ const Enrollment = require('../models/Enrollment');
 const svc = require('../services/studentEnrollmentService');
 const { paymentState } = require('../utils/packageMath');
 const { buildAdminPaymentHistory } = require('../utils/paymentHistory');
+const { packageRegisteredOn, dayOf } = require('../utils/registeredDate');
 const Account = require('../models/Account');
 const { attachPackages, activeStudentIdsOfClass } = require('../utils/enrollment');
 const { applyDerivedFilters } = require('../utils/studentQuery');
@@ -63,6 +64,8 @@ async function loadFilteredStudents(query) {
     tuitionStatus: query.tuitionStatus,
     studentStatus: query.studentStatus,
     account: query.account,
+    packages: query.packages,
+    registeredAt: query.registeredAt,
     accountedIds: needAccounts ? await accountedStudentIds() : null,
   });
 }
@@ -76,6 +79,7 @@ async function classIdOfFilter({ classId, className }) {
 }
 
 // GET /admin/students?classId=&className=&tuitionStatus=&q=&courseTitle=&studentStatus=&account=
+//   &packages=&registeredAt=
 //   &page=&limit=&sort=
 // Có page/limit → LỌC, SẮP XẾP, CẮT TRANG NGAY TRONG MONGODB (utils/studentIndexPipeline.js),
 // rồi chỉ dựng dữ liệu đầy đủ cho đúng số học sinh của trang đó.
@@ -238,7 +242,9 @@ exports.getPaymentHistory = async (req, res, next) => {
       adjustmentHistory: pkg.adjustmentHistory || [],
       // Tổng các dòng = số thực đã nộp (không kẹp theo học phí).
       paid: Math.max(state.paidRaw || 0, 0),
-      legacyDate: student.createdAt || null,
+      // Tiền cũ không có ngày đóng → lấy NGÀY ĐĂNG KÝ của chính gói đó (gói cũ thì lùi về
+      // ngày tạo gói, học sinh chưa có gói thì ngày tạo hồ sơ) — cùng một khái niệm ngày.
+      legacyDate: packageRegisteredOn(pkg) || dayOf(student.createdAt) || null,
     });
   }).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
